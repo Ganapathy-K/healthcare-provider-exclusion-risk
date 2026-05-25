@@ -1,0 +1,31 @@
+# Data — never commit raw or processed data files
+data/
+
+# Model artifacts
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Qdrant local storage (Docker host-mount)
+qdrant_storage/

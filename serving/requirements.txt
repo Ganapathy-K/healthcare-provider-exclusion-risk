@@ -1,0 +1,6 @@
+# 8.1 Python dependencies for the serving container
+fastapi
+uvicorn[standard]
+xgboost
+scikit-learn
+pandas

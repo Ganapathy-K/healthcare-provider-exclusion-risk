@@ -1,0 +1,43 @@
+{
+  "dataset": {
+    "rows": 500000,
+    "raw_columns": 331,
+    "feature_columns": 16,
+    "positives": 1183,
+    "negatives": 498817
+  },
+  "feature_order": [
+    "Entity Type Code",
+    "Provider Business Mailing Address State Name",
+    "Provider Business Mailing Address Telephone Number",
+    "Provider Business Practice Location Address State Name",
+    "Healthcare Provider Taxonomy Code_1",
+    "Provider License Number State Code_1",
+    "Provider Enumeration Year",
+    "Last Update Year",
+    "Provider Sex Code_F",
+    "Provider Sex Code_M",
+    "Provider Sex Code_U",
+    "Healthcare Provider Primary Taxonomy Switch_1_N",
+    "Healthcare Provider Primary Taxonomy Switch_1_Y",
+    "Is Sole Proprietor_N",
+    "Is Sole Proprietor_X",
+    "Is Sole Proprietor_Y"
+  ],
+  "serving_alignment": true,
+  "encoding_map_sizes": {
+    "Healthcare Provider Taxonomy Code_1": 745,
+    "Provider Business Mailing Address State Name": 121,
+    "Provider Business Practice Location Address State Name": 140,
+    "Provider License Number State Code_1": 60
+  },
+  "model": {
+    "test_rows": 100000,
+    "test_positives": 237,
+    "threshold": 0.5,
+    "recall": 0.662447,
+    "precision": 0.006004,
+    "f1": 0.0119,
+    "roc_auc": 0.753602
+  }
+}

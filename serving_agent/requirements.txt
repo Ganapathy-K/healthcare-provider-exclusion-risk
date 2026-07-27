@@ -32,4 +32,9 @@ langchain-classic==1.0.4
 google-genai==1.73.1
 langgraph==1.1.6
 
+# --- observability. Optional at runtime: src/tracing.py no-ops when the keys are unset, so
+# the service answers normally without it. Observability that can take down the thing it
+# observes is a liability, not a safeguard. Pinned because trace shapes change across majors.
+langfuse==4.14.1
+
 python-dotenv==1.2.1

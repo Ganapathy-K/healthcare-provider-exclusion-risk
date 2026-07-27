@@ -93,7 +93,19 @@ QDRANT_URL = "http://localhost:6333"
 QDRANT_COLLECTION_NAME = "leie_exclusions"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
-RETRIEVER_K = 3
+# Was 3, inherited from notebook 04 with nothing behind it. Measured on the golden set
+# (src/ablation.py, 2026-07-27): hit@k is flat from 3 to 10, but RECORD RECALL -- how many of
+# the correct records a list-style question actually gets back -- climbs 0.600 -> 0.867. The
+# questions this corpus attracts ("which adult homes in Texas were excluded?") have several
+# correct answers, and returning one of three is a wrong answer that scores as a hit.
+RETRIEVER_K = 10
+
+# Dense (meaning) + BM25 (exact words), measured and kept: at k=10 it improves hit rate
+# 0.778 -> 0.889, MRR 0.667 -> 0.778 and record recall 0.800 -> 0.867, and it is the only
+# thing that reaches the single PHLEBOTOMY record.
+# ⚠️ BM25 is worthless here without src/retrieve.tokenize -- see the warning in that function.
+USE_HYBRID = True
+HYBRID_WEIGHTS = (0.5, 0.5)
 
 # --- generation --------------------------------------------------------------------------
 GENERATION_MODEL_NAME = "gemini-2.5-flash"

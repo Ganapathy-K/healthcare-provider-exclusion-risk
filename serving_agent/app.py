@@ -39,11 +39,19 @@ from pydantic import BaseModel, Field
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+# In the image, src/ sits beside app.py at /app/src. In the repo, app.py is in serving_agent/
+# and src/ is its sibling one level up. Both are checked so the same file runs in both places
+# -- a service that can only be exercised after a container build is a service nobody tests.
+for candidate in (Path(__file__).resolve().parent / "src",
+                  Path(__file__).resolve().parent.parent / "src"):
+    if candidate.is_dir():
+        sys.path.insert(0, str(candidate))
+        break
 
 from agent import build_agent, query_leie_rag, score_provider_risk  # noqa: E402
 from agent import classify_intent, extract_npi  # noqa: E402
 from generate import REFUSAL_TEXT  # noqa: E402
+from rbac import get_role  # noqa: E402
 from retrieve import retrieve  # noqa: E402
 from vectorstore import get_client, get_embeddings  # noqa: E402
 from config import QDRANT_COLLECTION_NAME  # noqa: E402
@@ -55,15 +63,33 @@ class AskRequest(BaseModel):
         description="A question about OIG exclusions, or a request for one provider's risk score.",
         examples=["Which acupuncturists in New York were excluded?"],
     )
+    role: str = Field(
+        default="public",
+        description=(
+            "Which records and fields the caller may see. `investigator` (everything), "
+            "`analyst` (de-identified: no names, no NPIs), `auditor` (organisations only), "
+            "`public` (nothing). Unknown roles fall back to `public`."
+        ),
+        examples=["analyst"],
+    )
+
+    # ⚠️ A ROLE IN THE REQUEST BODY IS NOT AUTHENTICATION, and this API has none. Any caller
+    # can claim to be an investigator, so what is demonstrated here is the ENFORCEMENT
+    # mechanism -- filtering before the model sees anything -- not the identity check in front
+    # of it. In a real deployment the role comes from a verified token, never from the caller.
+    # Saying so is better than letting a reviewer assume this is access control end to end.
 
 
 class Source(BaseModel):
-    npi: int
-    name: str
-    specialty: str
-    state: str
-    excluded_on: str
-    category: str
+    """One cited record. Every field is optional because a role-filtered record genuinely has
+    fewer of them -- an analyst's records carry no name and no NPI."""
+
+    npi: int | None = None
+    name: str | None = None
+    specialty: str | None = None
+    state: str | None = None
+    excluded_on: str | None = None
+    category: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -81,6 +107,8 @@ class AskResponse(BaseModel):
 
     tool: Literal["query_leie_rag", "score_provider_risk"]
     status: Literal["answered", "refused"]
+    role: str = Field(description="The role actually applied, after unknown names fall back "
+                                  "to `public`. Echoed so a caller can see a typo took effect.")
     answer: str
     npi: str | None = Field(description="The NPI extracted from the question, if any.")
     sources: list[Source] = Field(
@@ -163,6 +191,8 @@ async def ask(request: AskRequest):
     if not ready:
         raise HTTPException(status_code=503, detail="Retriever is not loaded yet.")
 
+    role = get_role(request.role)
+
     try:
         decision = await asyncio.to_thread(classify_intent, request.question)
     except Exception as error:
@@ -172,36 +202,51 @@ async def ask(request: AskRequest):
     npi = decision["npi"] or extract_npi(request.question)
 
     if decision["intent"] == "risk":
+        # The scoring branch is investigator-only. A risk score is about ONE named provider by
+        # construction, so there is no de-identified version of it: returning a score for an
+        # NPI the caller supplied confirms that provider is in the dataset, which is itself
+        # disclosure. Roles that cannot see identities cannot use this branch at all.
+        if "NPI" not in role.visible_fields:
+            return AskResponse(
+                tool="score_provider_risk", status="refused", role=role.name,
+                answer=f"The '{role.name}' role cannot retrieve provider-level risk scores. "
+                       "Scoring identifies a specific provider.",
+                npi=None, sources=[])
+
         answer = await asyncio.to_thread(score_provider_risk, npi)
-        return AskResponse(tool="score_provider_risk", status="answered", answer=answer,
-                           npi=npi or None, sources=[])
+        return AskResponse(tool="score_provider_risk", status="answered", role=role.name,
+                           answer=answer, npi=npi or None, sources=[])
 
     try:
         from generate import answer_question
-        answer, documents = await asyncio.to_thread(answer_question, request.question)
+        answer, documents = await asyncio.to_thread(
+            answer_question, request.question, role=role)
     except Exception as error:
         raise HTTPException(
             status_code=502,
             detail=f"Retrieval pipeline failed: {type(error).__name__}: {error}") from error
 
     refused = REFUSAL_TEXT.lower() in answer.lower()
+    # Built from what each record actually carries, so a redacted field is absent rather than
+    # rendered as the string "None" -- which would leak the SHAPE of what was withheld.
     sources = [] if refused else [
-        Source(
-            npi=int(doc.metadata["NPI"]),
-            name=str(doc.metadata["NAME"]),
-            specialty=str(doc.metadata["SPECIALTY"]),
-            state=str(doc.metadata["STATE"]),
-            excluded_on=str(doc.metadata["EXCLDATE"]),
-            category=str(doc.metadata["GENERAL"]),
-        )
+        Source(**{key: value for key, value in (
+            ("npi", doc.metadata.get("NPI")),
+            ("name", doc.metadata.get("NAME")),
+            ("specialty", doc.metadata.get("SPECIALTY")),
+            ("state", doc.metadata.get("STATE")),
+            ("excluded_on", doc.metadata.get("EXCLDATE")),
+            ("category", doc.metadata.get("GENERAL")),
+        ) if value is not None})
         for doc in documents
     ]
 
     return AskResponse(
         tool="query_leie_rag",
         status="refused" if refused else "answered",
+        role=role.name,
         answer=answer,
-        npi=npi or None,
+        npi=npi if "NPI" in role.visible_fields and npi else None,
         sources=sources,
     )
 

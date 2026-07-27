@@ -25,6 +25,7 @@ import sys
 from google import genai
 
 from config import GENERATION_MODEL_NAME, GOOGLE_API_KEY, RETRIEVER_K
+from rbac import apply as rbac_apply, get_role
 from tracing import trace_span, update_span
 from retrieve import format_sources, retrieve
 
@@ -83,14 +84,37 @@ def build_prompt(question, documents):
     class of bug expensive. An unmeasured refusal rate hides it completely.
     """
     context = "\n".join(
-        f"[{i}] NPI {doc.metadata['NPI']}: {doc.page_content}"
+        f"[{i}] " + (f"NPI {doc.metadata['NPI']}: " if "NPI" in doc.metadata else "")
+        + doc.page_content
         for i, doc in enumerate(documents, start=1))
-    return (f"{SYSTEM_INSTRUCTION}\n\nExclusion records:\n{context}\n\n"
+
+    # The citation rule has to bend for roles that cannot see the field it names. Demanding an
+    # NPI from a context that contains none is the exact contradiction that made this model
+    # refuse everything once already -- see the warning above. So the instruction is relaxed
+    # rather than the context padded.
+    instruction = SYSTEM_INSTRUCTION
+    if documents and "NPI" not in documents[0].metadata:
+        instruction = instruction.replace(
+            "Name every provider you report together with its NPI, in the form NAME "
+            "(NPI: number). An exclusion claim without an NPI cannot be checked.\n",
+            "These records are anonymised: they carry no names or identifiers. Describe what "
+            "they show without naming anyone, and do not invent identifiers.\n")
+
+    return (f"{instruction}\n\nExclusion records:\n{context}\n\n"
             f"Question: {question}\n\nAnswer:")
 
 
-def answer_question(question, top_k=RETRIEVER_K):
-    """Retrieve, ground, answer. Returns (answer, documents).
+def answer_question(question, top_k=RETRIEVER_K, role="investigator"):
+    """Retrieve, enforce the role, ground, answer. Returns (answer, documents).
+
+    The role is applied BETWEEN retrieval and the prompt, which is the only position where it
+    means anything: once a record is in the prompt it has reached the model provider, the
+    trace and the logs, and asking the model to keep quiet about it is a request, not a
+    control. See rbac.py.
+
+    The default is `investigator` -- full access -- because every internal caller here (the
+    eval scripts, the CLI) is doing exclusion review. The API defaults the other way, to
+    `public`, because there the caller is unknown. Defaults should follow who is asking.
 
     Traced in two separate spans on purpose. "Retrieval missed the record" and "retrieval
     found it and the model refused anyway" look identical from the outside and need opposite
@@ -98,11 +122,20 @@ def answer_question(question, top_k=RETRIEVER_K):
     NPIs alongside the final answer is what makes them tellable apart afterwards instead of
     reproducible only by hand.
     """
-    with trace_span("retrieve", as_type="retriever", question=question, top_k=top_k) as span:
+    resolved_role = get_role(role) if isinstance(role, str) else role
+
+    with trace_span("retrieve", as_type="retriever", question=question, top_k=top_k,
+                    role=resolved_role.name) as span:
         documents = retrieve(question, top_k=top_k)
+        retrieved_count = len(documents)
+        documents = rbac_apply(documents, resolved_role)
         update_span(span, output={
-            "count": len(documents),
-            "npis": [doc.metadata["NPI"] for doc in documents],
+            "retrieved": retrieved_count,
+            "after_role_filter": len(documents),
+            "role": resolved_role.name,
+            # The NPIs AFTER filtering. Logging the pre-filter list would put records the role
+            # may not see into the trace -- which is the same leak the filter exists to stop.
+            "npis": [doc.metadata.get("NPI") for doc in documents],
         })
 
     if not documents:
@@ -116,7 +149,7 @@ def answer_question(question, top_k=RETRIEVER_K):
             "answer": answer,
             "refused": REFUSAL_TEXT.lower() in answer.lower(),
             "cited_npis": [doc.metadata["NPI"] for doc in documents
-                           if str(doc.metadata["NPI"]) in answer],
+                           if "NPI" in doc.metadata and str(doc.metadata["NPI"]) in answer],
         })
 
     return answer, documents

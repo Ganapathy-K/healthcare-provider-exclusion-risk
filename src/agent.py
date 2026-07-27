@@ -125,7 +125,7 @@ def score_provider_risk(npi):
             "means more likely to be excluded). This prioritises review; it is not a finding.")
 
 
-def query_leie_rag(question):
+def query_leie_rag(question, role="investigator"):
     """Grounded retrieval over the exclusion records, with sources appended.
 
     Sources are appended only when the question was actually ANSWERED. Listing them under a
@@ -135,7 +135,7 @@ def query_leie_rag(question):
     neighbours are simply providers whose names contain "Frances", and printing them beneath
     a refusal makes a correct refusal look like a confused answer.
     """
-    answer, documents = answer_question(question)
+    answer, documents = answer_question(question, role=role)
     refused = REFUSAL_TEXT.lower() in answer.lower()
     if refused or not documents:
         return answer
@@ -147,6 +147,7 @@ class AgentState(TypedDict):
     tool_used: str
     npi: str
     answer: str
+    role: str
 
 
 # An NPI is exactly ten digits. The lookarounds stop a 12-digit string from yielding a
@@ -214,7 +215,8 @@ def tool_node(state: AgentState) -> AgentState:
     if state["tool_used"] == "score_provider_risk":
         state["answer"] = score_provider_risk(state["npi"])
     else:
-        state["answer"] = query_leie_rag(state["question"])
+        state["answer"] = query_leie_rag(state["question"],
+                                         role=state.get("role") or "investigator")
     return state
 
 
@@ -228,16 +230,16 @@ def build_agent():
     return graph.compile()
 
 
-def ask(question, agent=None):
+def ask(question, agent=None, role="investigator"):
     """Run one question through the agent, as one trace.
 
     The outer span is what makes the inner ones a story rather than three unrelated events:
     route -> retrieve -> generate, linked, with the question at the top.
     """
     agent = agent or build_agent()
-    with trace_span("agent", as_type="span", question=question) as span:
+    with trace_span("agent", as_type="span", question=question, role=role) as span:
         result = agent.invoke({"question": question, "tool_used": "", "npi": "",
-                               "answer": ""})
+                               "answer": "", "role": role})
         update_span(span, output={"tool": result["tool_used"],
                                   "npi": result["npi"] or None,
                                   "answer": result["answer"][:500]})

@@ -141,6 +141,38 @@ def _generate_refuses():
     return "refused"
 
 
+@check("roles are enforced: names and NPIs stripped, unknown roles fail closed")
+def _rbac():
+    import json
+    import re
+
+    from generate import answer_question
+    from rbac import get_role
+    from retrieve import retrieve
+
+    question = "Which acupuncturists in New York were excluded?"
+
+    # An unknown role must not widen access. A typo that returns everything is the worst
+    # possible default, and it is the default you get by accident.
+    assert get_role("typo-role").name == "public", "unknown role did not fall back to public"
+    assert get_role("").name == "public", "empty role did not fall back to public"
+
+    answer, documents = answer_question(question, role="analyst")
+    text = answer + json.dumps([doc.metadata for doc in documents])
+    assert not re.search(r"GOHRING|ORLANDO", text.upper()), f"analyst saw a name: {text[:200]}"
+    assert not re.search(r"(?<!\d)\d{10}(?!\d)", text), (
+        "analyst saw an NPI -- one NPPES lookup turns that back into a name, so this is not "
+        "de-identified")
+
+    # The corpus must survive redaction. The first implementation mutated documents in place,
+    # so one analyst query stripped the names out of the BM25 index for every later caller.
+    after = retrieve(question, top_k=3)
+    assert any("NAME" in doc.metadata for doc in after), (
+        "redaction destroyed the shared corpus -- documents must be COPIED, not mutated")
+
+    return "analyst de-identified, corpus intact, unknown roles closed"
+
+
 @check("the agent routes both intents and scores a real NPI")
 def _agent():
     from agent import ask, build_agent

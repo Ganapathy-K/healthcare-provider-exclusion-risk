@@ -94,14 +94,24 @@ def retrieve(question, top_k=RETRIEVER_K, hybrid=USE_HYBRID):
     return get_retriever(top_k=top_k, hybrid=hybrid).invoke(question)
 
 
+SOURCE_FIELDS = [("NAME", ""), ("NPI", "NPI: "), ("SPECIALTY", ""), ("STATE", ""),
+                 ("EXCLDATE", "excluded: "), ("GENERAL", "")]
+
+
 def format_sources(documents):
-    """One checkable line per record. The NPI is the point -- it is the only field that
-    identifies a provider unambiguously, and an exclusion claim without it cannot be verified."""
+    """One checkable line per record, showing only the fields present on it.
+
+    Fields are looked up rather than assumed, because a role-filtered record genuinely does
+    not have them all -- an analyst's records carry no NAME. The first version indexed the
+    metadata directly and raised KeyError the moment RBAC was wired in, which is the right
+    kind of failure (loud) but the wrong place for it: a formatter should render what it is
+    given, not dictate what it must be given.
+    """
     lines = []
     for index, document in enumerate(documents, start=1):
-        meta = document.metadata
-        lines.append(f"  {index}. {meta['NAME']} | NPI: {meta['NPI']} | {meta['SPECIALTY']} "
-                     f"| {meta['STATE']} | excluded: {meta['EXCLDATE']} | {meta['GENERAL']}")
+        parts = [f"{label}{document.metadata[key]}"
+                 for key, label in SOURCE_FIELDS if key in document.metadata]
+        lines.append(f"  {index}. " + " | ".join(parts))
     return "\n".join(lines)
 
 

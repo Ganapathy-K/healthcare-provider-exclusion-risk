@@ -31,6 +31,7 @@ from typing import TypedDict
 
 import pandas as pd
 import xgboost as xgb
+from google.genai import types
 from langgraph.graph import END, StateGraph
 
 from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
@@ -60,12 +61,23 @@ ROUTER_PROMPT = (
     'intent = "rag": the user asks about the exclusion RECORDS themselves -- looking up, '
     'listing, counting, or explaining who is excluded, why, where, or when. Signals: '
     '"are there any", "who", "list", "how many", "what reason", "in <state>".\n\n'
-    'Respond with ONLY a JSON object: {"intent": "risk" | "rag", "npi": "<digits or null>"}.\n\n'
+    "THE DECIDING TEST, which matters more than any keyword: is the question about ONE "
+    "PARTICULAR PROVIDER, or about the data in general? A question containing the words "
+    '"risk", "risky" or "riskiest" is still "rag" when it asks about a group, a specialty, a '
+    "state, or what tends to be true -- because the model scores one provider at a time and "
+    "cannot answer a question about a population.\n\n"
+    'Respond with ONLY a JSON object: {"intent": "risk" | "rag"}.\n\n'
     "Examples:\n"
-    'Q: Are there any excluded providers in Texas? -> {"intent": "rag", "npi": null}\n'
-    'Q: How many providers were excluded for fraud? -> {"intent": "rag", "npi": null}\n'
-    'Q: What is the risk score for NPI 1234567890? -> {"intent": "risk", "npi": "1234567890"}\n'
-    'Q: Should we be worried about 1679576722? -> {"intent": "risk", "npi": "1679576722"}\n\n'
+    'Q: Are there any excluded providers in Texas? -> {"intent": "rag"}\n'
+    'Q: How many providers were excluded for fraud? -> {"intent": "rag"}\n'
+    'Q: Which specialties are the riskiest overall? -> {"intent": "rag"}   '
+    "(about a population, not one provider)\n"
+    'Q: What makes a provider high risk? -> {"intent": "rag"}   '
+    "(asks what tends to be true, not for a score)\n"
+    'Q: What is the risk score for NPI 1234567890? -> {"intent": "risk"}\n'
+    'Q: Should we be worried about 1679576722? -> {"intent": "risk"}\n'
+    'Q: How risky is that pharmacy in New York? -> {"intent": "risk"}   '
+    "(one provider, even with no NPI given)\n\n"
     "Question: "
 )
 
@@ -135,22 +147,48 @@ class AgentState(TypedDict):
     answer: str
 
 
+# An NPI is exactly ten digits. The lookarounds stop a 12-digit string from yielding a
+# spurious 10-digit "match" out of its middle.
+NPI_PATTERN = re.compile(r"(?<!\d)\d{10}(?!\d)")
+
+
+def extract_npi(question):
+    """Pull the NPI out with a regex, not the LLM.
+
+    ⚠️ WHY THIS WAS TAKEN AWAY FROM THE MODEL. The router originally did two jobs in one call:
+    decide the intent, and extract the identifier. The second is a fixed-width number in a
+    string -- a regex does it perfectly, for free, identically every time.
+
+    That matters more than it sounds, because LLM output is NOT reproducible even at
+    temperature 0. Measured 2026-07-27 on this exact prompt: two consecutive runs at
+    temperature 0 disagreed on which questions they got right, and the extracted NPI for
+    "risk score for NPI 123456789?" changed between runs. Server-side batching and routing
+    mean identical inputs need not give identical outputs; "set temperature to 0 for
+    determinism" is folklore.
+
+    So the model keeps the judgement call it is actually needed for -- what the user WANTS --
+    and the deterministic half stops being a source of variance.
+    """
+    match = NPI_PATTERN.search(question)
+    return match.group(0) if match else ""
+
+
 def classify_intent(question):
-    """Ask the LLM which tool this question needs, and for any NPI in it.
+    """Decide which tool this question needs. The NPI comes from `extract_npi`, not from here.
 
     Falls back to `rag` when the JSON cannot be parsed. That default is deliberate: retrieval
     over records is the harmless branch, while a mis-routed `risk` either scores the wrong
-    provider or fails on a missing NPI.
+    provider or fails for want of an NPI.
     """
     response = get_client().models.generate_content(
-        model=GENERATION_MODEL_NAME, contents=ROUTER_PROMPT + question)
+        model=GENERATION_MODEL_NAME, contents=ROUTER_PROMPT + question,
+        config=types.GenerateContentConfig(temperature=0))
     match = re.search(r"\{.*\}", response.text or "", re.DOTALL)
-    parsed = json.loads(match.group(0)) if match else {"intent": "rag", "npi": None}
+    parsed = json.loads(match.group(0)) if match else {"intent": "rag"}
 
-    npi = parsed.get("npi")
     return {
         "intent": "risk" if parsed.get("intent") == "risk" else "rag",
-        "npi": "" if npi in (None, "null", "") else str(npi).strip(),
+        "npi": extract_npi(question),
     }
 
 

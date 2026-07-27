@@ -39,6 +39,7 @@ from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
 from features import FEATURE_COLUMNS, encode_provider_record, load_encoding_maps
 from generate import REFUSAL_TEXT, answer_question, get_client
 from retrieve import format_sources
+from tracing import flush, trace_span, update_span
 
 # The columns the encoder needs, kept in agent_columns so `ingest` can write the slim
 # lookup parquet without importing this module's langgraph/Gemini/embedding stack.
@@ -194,10 +195,18 @@ def classify_intent(question):
 
 
 def router_node(state: AgentState) -> AgentState:
-    decision = classify_intent(state["question"])
-    state["tool_used"] = ("score_provider_risk" if decision["intent"] == "risk"
-                          else "query_leie_rag")
-    state["npi"] = decision["npi"]
+    """Choose the tool, and record the choice.
+
+    The routing decision is the single most useful thing in a trace of this agent: a question
+    answered by the wrong branch produces a confident, well-formed reply from the wrong half
+    of the system, which the response text alone rarely reveals.
+    """
+    with trace_span("route", as_type="span", question=state["question"]) as span:
+        decision = classify_intent(state["question"])
+        state["tool_used"] = ("score_provider_risk" if decision["intent"] == "risk"
+                              else "query_leie_rag")
+        state["npi"] = decision["npi"]
+        update_span(span, output={"tool": state["tool_used"], "npi": state["npi"] or None})
     return state
 
 
@@ -220,8 +229,19 @@ def build_agent():
 
 
 def ask(question, agent=None):
+    """Run one question through the agent, as one trace.
+
+    The outer span is what makes the inner ones a story rather than three unrelated events:
+    route -> retrieve -> generate, linked, with the question at the top.
+    """
     agent = agent or build_agent()
-    return agent.invoke({"question": question, "tool_used": "", "npi": "", "answer": ""})
+    with trace_span("agent", as_type="span", question=question) as span:
+        result = agent.invoke({"question": question, "tool_used": "", "npi": "",
+                               "answer": ""})
+        update_span(span, output={"tool": result["tool_used"],
+                                  "npi": result["npi"] or None,
+                                  "answer": result["answer"][:500]})
+    return result
 
 
 if __name__ == "__main__":

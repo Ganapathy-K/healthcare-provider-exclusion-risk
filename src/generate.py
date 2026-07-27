@@ -25,6 +25,7 @@ import sys
 from google import genai
 
 from config import GENERATION_MODEL_NAME, GOOGLE_API_KEY, RETRIEVER_K
+from tracing import trace_span, update_span
 from retrieve import format_sources, retrieve
 
 REFUSAL_TEXT = "The retrieved exclusion records do not answer that."
@@ -89,14 +90,36 @@ def build_prompt(question, documents):
 
 
 def answer_question(question, top_k=RETRIEVER_K):
-    """Retrieve, ground, answer. Returns (answer, documents)."""
-    documents = retrieve(question, top_k=top_k)
+    """Retrieve, ground, answer. Returns (answer, documents).
+
+    Traced in two separate spans on purpose. "Retrieval missed the record" and "retrieval
+    found it and the model refused anyway" look identical from the outside and need opposite
+    fixes -- one is a retriever problem, the other a prompt problem. Recording the retrieved
+    NPIs alongside the final answer is what makes them tellable apart afterwards instead of
+    reproducible only by hand.
+    """
+    with trace_span("retrieve", as_type="retriever", question=question, top_k=top_k) as span:
+        documents = retrieve(question, top_k=top_k)
+        update_span(span, output={
+            "count": len(documents),
+            "npis": [doc.metadata["NPI"] for doc in documents],
+        })
+
     if not documents:
         return REFUSAL_TEXT, []
 
-    response = get_client().models.generate_content(
-        model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents))
-    return (response.text or "").strip(), documents
+    with trace_span("generate", as_type="generation", question=question) as span:
+        response = get_client().models.generate_content(
+            model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents))
+        answer = (response.text or "").strip()
+        update_span(span, output={
+            "answer": answer,
+            "refused": REFUSAL_TEXT.lower() in answer.lower(),
+            "cited_npis": [doc.metadata["NPI"] for doc in documents
+                           if str(doc.metadata["NPI"]) in answer],
+        })
+
+    return answer, documents
 
 
 if __name__ == "__main__":

@@ -56,6 +56,12 @@ NPPES_SAMPLE_ROWS = 500_000
 LEIE_PATH = RAW_DIR / "oig_leie_202602.csv"
 LABELLED_DATASET_PATH = PROCESSED_DIR / "labelled_dataset.parquet"
 
+# The 12 columns the risk scorer needs, split out of the 331-column labelled dataset. 60 MB
+# down to 8.3 MB -- worth doing because this is what ships inside the agent's container image,
+# and cold-start time scales with image size. Written by `python src/ingest.py --save`; the
+# agent falls back to the full dataset when it is absent.
+PROVIDER_LOOKUP_PATH = PROCESSED_DIR / "provider_lookup.parquet"
+
 NUCC_TAXONOMY_URL = "https://nucc.org/images/stories/CSV/nucc_taxonomy_251.csv"
 
 # --- model -------------------------------------------------------------------------------
@@ -89,7 +95,20 @@ MLFLOW_TRACKING_URI = (PROJECT_ROOT / "notebooks" / "mlruns").resolve().as_uri()
 RISK_THRESHOLD = 0.5
 
 # --- retrieval ---------------------------------------------------------------------------
-QDRANT_URL = "http://localhost:6333"
+# Two ways to reach Qdrant, and which one is in use is an environment decision, not a code one.
+#
+#   server    (default, local dev)  the Docker container on localhost:6333
+#   embedded  (set QDRANT_PATH)     a plain directory, no server, no network
+#
+# Cloud Run runs one container per instance and gives it one port, so a separate Qdrant server
+# would mean a second service to run, pay for and secure. The embedded store is a directory
+# that can be baked into the image at build time, which for a read-only index of 8,482 records
+# is the right shape: nothing to start, nothing to connect to, nothing to fall over.
+# Its limitation is real and worth naming: the embedded store takes an exclusive file lock, so
+# only one process per container may touch it, and it cannot be written to by a running
+# service. Both are fine for an index rebuilt at ingest.
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_PATH = os.getenv("QDRANT_PATH") or None
 QDRANT_COLLECTION_NAME = "leie_exclusions"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384

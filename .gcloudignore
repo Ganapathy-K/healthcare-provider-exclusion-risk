@@ -1,0 +1,27 @@
+# Cloud Build upload list for the AGENT service.
+#
+# ⚠️ THIS FILE MUST EXIST. Without it `gcloud run deploy --source` falls back to .gitignore,
+# which excludes data/ -- and data/ is where the Qdrant index, the LEIE csv and the provider
+# lookup live. The build would then SUCCEED and ship a service with no index and no records,
+# reporting nothing wrong. The same trap cost an hour on the insurance project.
+
+__pycache__/
+*.pyc
+.env
+.venv/
+notebooks/
+mlruns/
+qdrant_storage/
+docs/
+logs/
+*.log
+
+# The 60 MB, 331-column dataset. The agent reads the 8.3 MB provider_lookup.parquet instead;
+# shipping both would triple the image for nothing.
+data/processed/labelled_dataset.parquet
+
+# The scorer's own service builds from serving/ with its own Dockerfile.
+serving/Dockerfile
+serving/requirements.txt
+serving/*_superseded.*
+serving/server.log

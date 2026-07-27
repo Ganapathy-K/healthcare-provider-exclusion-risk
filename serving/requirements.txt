@@ -1,6 +1,24 @@
-# 8.1 Python dependencies for the serving container
-fastapi
-uvicorn[standard]
-xgboost
-scikit-learn
-pandas
+# Pinned to the versions this service was trained, evaluated and deployed against.
+#
+# These were unpinned until 2026-07-27, which meant every Cloud Run build pulled whatever was
+# newest that day. That is a live-service risk, not a tidiness one: XGBoost's model format has
+# changed across majors, so a new release can refuse to load model.ubj outright -- and the
+# quieter failure is worse, where a scikit-learn or numpy change shifts a prediction slightly
+# and docs/baseline.json silently stops describing what is actually deployed.
+#
+# Changing a pin means re-running `python src/baseline.py --check` and expecting it to pass.
+
+fastapi==0.139.0
+uvicorn[standard]==0.38.0
+pydantic==2.12.5
+
+# Loads serving/model.ubj. The saved model format is tied to the major version that wrote it.
+xgboost==3.2.0
+
+# Not imported by app.py, but XGBClassifier (xgboost's sklearn wrapper) is what saved the
+# model, and src/model.py and src/baseline.py need it to reproduce the split and the metrics.
+# Pinned so training and serving cannot drift apart.
+scikit-learn==1.8.0
+
+pandas==2.3.3
+numpy==2.3.5

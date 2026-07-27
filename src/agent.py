@@ -35,21 +35,14 @@ from google.genai import types
 from langgraph.graph import END, StateGraph
 
 from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
-                    RISK_THRESHOLD)
+                    PROVIDER_LOOKUP_PATH, RISK_THRESHOLD)
 from features import FEATURE_COLUMNS, encode_provider_record, load_encoding_maps
 from generate import REFUSAL_TEXT, answer_question, get_client
 from retrieve import format_sources
 
-# Only the columns the encoder needs. The labelled dataset is 331 columns wide and reading all
-# of them to score one provider costs about a gigabyte of memory for no benefit.
-LOOKUP_COLUMNS = [
-    "NPI", "Entity Type Code", "Provider Business Mailing Address Telephone Number",
-    "Provider Enumeration Date", "Last Update Date", "Provider Sex Code",
-    "Healthcare Provider Primary Taxonomy Switch_1", "Is Sole Proprietor",
-    "Healthcare Provider Taxonomy Code_1", "Provider Business Mailing Address State Name",
-    "Provider Business Practice Location Address State Name",
-    "Provider License Number State Code_1",
-]
+# The columns the encoder needs, kept in agent_columns so `ingest` can write the slim
+# lookup parquet without importing this module's langgraph/Gemini/embedding stack.
+from agent_columns import LOOKUP_COLUMNS
 
 ROUTER_PROMPT = (
     "You are the router for a healthcare provider-integrity assistant. "
@@ -95,9 +88,17 @@ def get_model():
 
 
 def get_lookup():
+    """The provider table used for scoring, preferring the slim 12-column copy.
+
+    Falls back to the full labelled dataset, which is the same rows and 331 columns. The slim
+    file exists because this is what ships inside the deployed image: 60 MB down to 8.3 MB,
+    and Cloud Run cold-start time scales with image size.
+    """
     global _lookup
     if _lookup is None:
-        _lookup = pd.read_parquet(LABELLED_DATASET_PATH, columns=LOOKUP_COLUMNS)
+        source = (PROVIDER_LOOKUP_PATH if PROVIDER_LOOKUP_PATH.exists()
+                  else LABELLED_DATASET_PATH)
+        _lookup = pd.read_parquet(source, columns=LOOKUP_COLUMNS)
     return _lookup
 
 

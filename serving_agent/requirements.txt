@@ -1,0 +1,35 @@
+# Pinned to the versions the agent was measured against (docs/baseline.json, and the router
+# and answer evaluations in src/). An unpinned RAG stack changes behaviour silently: a new
+# embedding release re-orders retrieval and the recorded scores stop describing the code.
+
+# --- API
+fastapi==0.139.0
+uvicorn[standard]==0.38.0
+pydantic==2.12.5
+
+# --- the risk model. Must match serving/requirements.txt: this service and the scorer load
+# the same model.ubj, and the saved format is tied to the major version that wrote it.
+xgboost==3.2.0
+scikit-learn==1.8.0
+pandas==2.3.3
+numpy==2.3.5
+pyarrow==22.0.0
+
+# --- retrieval: dense (embeddings + Qdrant) and sparse (BM25)
+langchain==1.2.15
+langchain-core==1.4.9
+langchain-community==0.4.1
+langchain-huggingface==1.2.2
+langchain-qdrant==1.1.0
+sentence-transformers==5.4.1
+qdrant-client==1.18.0
+rank-bm25==0.2.2
+# EnsembleRetriever moved here in LangChain 1.x; langchain.retrievers no longer has it.
+langchain-classic==1.0.4
+
+# --- the router. `from google import genai` is the google-genai SDK; the older
+# google-generativeai package is a different import path and is not used here.
+google-genai==1.73.1
+langgraph==1.1.6
+
+python-dotenv==1.2.1

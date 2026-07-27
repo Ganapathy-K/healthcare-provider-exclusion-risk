@@ -22,7 +22,8 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
-from config import (EMBEDDING_DIM, EMBEDDING_MODEL_NAME, QDRANT_COLLECTION_NAME, QDRANT_URL)
+from config import (EMBEDDING_DIM, EMBEDDING_MODEL_NAME, QDRANT_COLLECTION_NAME,
+                    QDRANT_PATH, QDRANT_URL)
 from ingest import load_leie
 
 DISTANCE_METRIC = Distance.COSINE
@@ -43,8 +44,21 @@ def get_embeddings():
     return _embeddings
 
 
+_client = None
+
+
 def get_client():
-    return QdrantClient(url=QDRANT_URL)
+    """The Qdrant handle: embedded when QDRANT_PATH is set, otherwise the server.
+
+    One client per process, because the embedded store takes an exclusive file lock and a
+    second client on the same directory raises AlreadyLocked. Anything that builds two
+    retrievers -- the hybrid retriever does -- would hit that immediately.
+    """
+    global _client
+    if _client is None:
+        _client = (QdrantClient(path=QDRANT_PATH) if QDRANT_PATH
+                   else QdrantClient(url=QDRANT_URL))
+    return _client
 
 
 def provider_name(row):

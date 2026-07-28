@@ -29,3 +29,6 @@ mlartifacts/
 
 # Qdrant local storage (Docker host-mount)
 qdrant_storage/
+
+# Internal workplace material - never publish
+manager_pitch_memo.md

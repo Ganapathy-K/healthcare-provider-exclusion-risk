@@ -4,7 +4,7 @@ Everything the six notebooks hard-coded now lives here once. Three things this f
 of them cosmetic:
 
 1. **Absolute paths.** Notebooks 01, 02, 03 and 04 each contained
-   `Path("D:/Data Science/Visual Studio Code/healthcare-provider-termination/data/...")`.
+   `Path("D:/Data Science/Visual Studio Code/healthcare-provider-exclusion-risk/data/...")`.
    That path exists on exactly one machine, so the repo cannot run for anyone who clones it
    -- including inside a container, which is where it is meant to end up. Paths are now
    derived from this file's own location.

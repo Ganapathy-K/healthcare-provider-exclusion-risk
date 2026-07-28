@@ -34,6 +34,12 @@ ENV HF_HOME=/app/.cache/huggingface
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
+# Baking the weights in is not enough on its own: at startup sentence-transformers still sends a
+# HEAD request to huggingface.co to check whether the cached copy is stale. On 2026-07-28 that
+# check was rate-limited (HTTP 429, "wait 190s") and cold starts served 429 to callers -- an
+# outage caused by someone else's server saying no. Offline mode reads the cache and never asks.
+ENV HF_HUB_OFFLINE=1
+
 COPY serving_agent/app.py ./
 COPY src/ ./src/
 COPY data/raw/ ./data/raw/

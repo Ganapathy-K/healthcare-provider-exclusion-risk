@@ -57,12 +57,12 @@ def _ingest():
     return f"{report['nppes_rows']:,} rows, {report['positives']} excluded"
 
 
-@check("feature order matches serving/app.py")
+@check("feature order matches the trained model")
 def _alignment():
     from features import FEATURE_COLUMNS, check_serving_alignment
-    aligned, serving_columns = check_serving_alignment()
-    assert aligned, (f"serving has {serving_columns}\nfeatures has {FEATURE_COLUMNS}")
-    return f"{len(FEATURE_COLUMNS)} columns, identical in both places"
+    aligned, trained_columns = check_serving_alignment()
+    assert aligned, (f"model was trained on {trained_columns}\nfeatures has {FEATURE_COLUMNS}")
+    return f"{len(FEATURE_COLUMNS)} columns, matching the model artifact"
 
 
 @check("the deployed model IS the weighted one")

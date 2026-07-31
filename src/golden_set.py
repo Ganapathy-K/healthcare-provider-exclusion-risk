@@ -78,6 +78,68 @@ GOLDEN_SET = [
         "note": "PARAMEDIC TECHNICIAN appears once.",
     },
 
+    # --- answerable (added 2026-07-31): rare specialty+state, exactly two records each. ---
+    # Every NPI below was re-derived from data/raw/oig_leie_202602.csv by grouping the
+    # NPI-bearing records on (SPECIALTY, STATE) and keeping only pairs -- verify() re-checks
+    # them against the source, so the set fails loudly rather than rotting if the file changes.
+    {
+        "question": "Were any ambulance companies in California excluded?",
+        "expected_npis": [1871502146, 1811022312],
+        "note": "AMBULANCE COMPANY / CA -- exactly two.",
+    },
+    {
+        "question": "Which anesthesiologists in Colorado were excluded?",
+        "expected_npis": [1366428773, 1629085105],
+        "note": "ANESTHESIOLOGY / CO -- exactly two.",
+    },
+    {
+        "question": "Were any assisted living facilities in Florida excluded?",
+        "expected_npis": [1750914099, 1720580863],
+        "note": "ASSISTED LIVING FACI / FL -- exactly two.",
+    },
+    {
+        "question": "Which cardiologists in Colorado were excluded?",
+        "expected_npis": [1518929421, 1558315986],
+        "note": "CARDIOLOGY / CO -- exactly two.",
+    },
+    {
+        "question": "Were any dermatologists in Illinois excluded?",
+        "expected_npis": [1154362937, 1538200308],
+        "note": "DERMATOLOGY / IL -- exactly two.",
+    },
+    {
+        "question": "Which community mental health centers in New York were excluded?",
+        "expected_npis": [1528377181, 1528353307],
+        "note": "COMM MNTL HLTH CNTR / NY -- exactly two.",
+    },
+    {
+        "question": "Were any oxygen equipment suppliers in Maine excluded?",
+        "expected_npis": [1659305845, 1467486654],
+        "note": "DME - OXYGEN / ME -- exactly two.",
+    },
+
+    # --- answerable (added 2026-07-31): specialties with exactly one NPI-bearing record. ---
+    {
+        "question": "Was a rural health clinic ever excluded?",
+        "expected_npis": [1215925102],
+        "note": "RURAL HEALTH CLINIC appears once among NPI-bearing records.",
+    },
+    {
+        "question": "Has an interpreter or translator been excluded?",
+        "expected_npis": [1982069944],
+        "note": "INTERPRETER/TRANS appears once.",
+    },
+    {
+        "question": "Was a home-infusion equipment supplier excluded?",
+        "expected_npis": [1043284847],
+        "note": "DME - HOME INFUSION appears once.",
+    },
+    {
+        "question": "Has a hotel or lodging business been excluded?",
+        "expected_npis": [1013137348],
+        "note": "HOTEL/LODGING appears once -- an unusual category worth probing.",
+    },
+
     # --- expected refusals: nothing in the corpus is about this at all ---
     {
         "question": "What is the capital of France?",
@@ -115,6 +177,26 @@ GOLDEN_SET = [
         "expected_refusal": True,
         "note": "TRAP. There is no patient data anywhere in the LEIE, and inventing one "
                 "would be the most damaging failure this system could have.",
+    },
+
+    # --- refusals/traps (added 2026-07-31): plausible, on-topic, and absent from the fields ---
+    {
+        "question": "What are the office phone numbers of the excluded ambulance companies?",
+        "expected_refusal": True,
+        "note": "Retrieval will surface the ambulance records, but the indexed fields carry no "
+                "telephone number -- a fluent model may still try to produce one.",
+    },
+    {
+        "question": "How many years in prison did the excluded pharmacists receive?",
+        "expected_refusal": True,
+        "note": "TRAP. The LEIE records the exclusion, never any criminal sentence; retrieval "
+                "surfaces pharmacists and the temptation is to invent a term of years.",
+    },
+    {
+        "question": "Which of the excluded providers have since appealed and won reinstatement?",
+        "expected_refusal": True,
+        "note": "TRAP. A reinstatement date exists in the raw file but is NOT among the indexed "
+                "fields, and appeal outcomes are nowhere in the LEIE at all.",
     },
 ]
 

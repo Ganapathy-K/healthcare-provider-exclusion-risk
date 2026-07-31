@@ -18,25 +18,15 @@ ENCODING_MAPS_PATH = Path(__file__).parent / "encoding_maps.json"
 with open(ENCODING_MAPS_PATH) as file:
     encoding_maps = json.load(file)
 
-# 4.4 Feature column order — must match training exactly
-FEATURE_COLUMNS = [
-    "Entity Type Code",
-    "Provider Business Mailing Address State Name",
-    "Provider Business Mailing Address Telephone Number",
-    "Provider Business Practice Location Address State Name",
-    "Healthcare Provider Taxonomy Code_1",
-    "Provider License Number State Code_1",
-    "Provider Enumeration Year",
-    "Last Update Year",
-    "Provider Sex Code_F",
-    "Provider Sex Code_M",
-    "Provider Sex Code_U",
-    "Healthcare Provider Primary Taxonomy Switch_1_N",
-    "Healthcare Provider Primary Taxonomy Switch_1_Y",
-    "Is Sole Proprietor_N",
-    "Is Sole Proprietor_X",
-    "Is Sole Proprietor_Y",
-]
+# 4.4 Feature column order — read from the model, never retyped
+#
+# XGBoost scores by POSITION and validates nothing about column names, so a list that drifts
+# from the trained order produces confident, silent nonsense. This order used to be a literal
+# list copied from src/features.py, which meant two places could disagree with nothing
+# noticing. The booster already stores the exact names in the exact order it was fit on, so
+# reading them here removes the second copy entirely -- it comes from the same file that does
+# the scoring and therefore cannot disagree with it.
+FEATURE_COLUMNS = list(model.get_booster().feature_names)
 
 # 4.5 Request schema — categorical fields accepted as raw strings
 class ProviderInput(BaseModel):

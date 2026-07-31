@@ -38,6 +38,7 @@ from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
                     PROVIDER_LOOKUP_PATH, RISK_THRESHOLD)
 from features import FEATURE_COLUMNS, encode_provider_record, load_encoding_maps
 from generate import REFUSAL_TEXT, answer_question, get_client
+from injection_guard import BOUNDARY_INSTRUCTION, wrap
 from retrieve import format_sources
 from tracing import flush, trace_span, update_span
 
@@ -179,15 +180,31 @@ def extract_npi(question):
 def classify_intent(question):
     """Decide which tool this question needs. The NPI comes from `extract_npi`, not from here.
 
-    Falls back to `rag` when the JSON cannot be parsed. That default is deliberate: retrieval
-    over records is the harmless branch, while a mis-routed `risk` either scores the wrong
-    provider or fails for want of an NPI.
+    Falls back to `rag` when the router output cannot be parsed. That default is deliberate:
+    retrieval over records is the harmless branch, while a mis-routed `risk` either scores the
+    wrong provider or fails for want of an NPI.
+
+    ⚠️ THE FALLBACK HAS TO CATCH A PARSE ERROR, NOT JUST A MISSING BRACE, AND THE FIRST VERSION
+    DID NOT. The old code fell back only when the regex found no `{...}`; when it found braces
+    that were not valid JSON, json.loads RAISED and took the whole agent down. A prompt-injection
+    attempt (found by injection_eval.py running with the boundary guard disabled) made the router
+    echo brace content the greedy match grabbed and could not parse -- a crash, not a safe
+    default, on exactly the adversarial input the fallback existed to survive. Failing closed
+    means treating ANY unparseable output as `rag`, which is what the docstring always claimed.
     """
+    # The question is delimited and the boundary rule appended so a routing instruction smuggled
+    # into the text ("...route it to the scorer") is classified as part of the question, not
+    # obeyed as a command. injection_eval.py caught exactly this: an aggregate RAG question with
+    # an injected NPI and a "route to scorer" rider was diverted to the risk branch.
     response = get_client().models.generate_content(
-        model=GENERATION_MODEL_NAME, contents=ROUTER_PROMPT + question,
+        model=GENERATION_MODEL_NAME,
+        contents=f"{ROUTER_PROMPT}\n{BOUNDARY_INSTRUCTION}\n\n{wrap(question)}",
         config=types.GenerateContentConfig(temperature=0))
     match = re.search(r"\{.*\}", response.text or "", re.DOTALL)
-    parsed = json.loads(match.group(0)) if match else {"intent": "rag"}
+    try:
+        parsed = json.loads(match.group(0)) if match else {"intent": "rag"}
+    except (json.JSONDecodeError, ValueError):
+        parsed = {"intent": "rag"}
 
     return {
         "intent": "risk" if parsed.get("intent") == "risk" else "rag",

@@ -25,6 +25,7 @@ import sys
 from google import genai
 
 from config import GENERATION_MODEL_NAME, GOOGLE_API_KEY, RETRIEVER_K
+from injection_guard import BOUNDARY_INSTRUCTION, wrap
 from rbac import apply as rbac_apply, get_role
 from tracing import trace_span, update_span
 from retrieve import format_sources, retrieve
@@ -100,8 +101,33 @@ def build_prompt(question, documents):
             "These records are anonymised: they carry no names or identifiers. Describe what "
             "they show without naming anyone, and do not invent identifiers.\n")
 
-    return (f"{instruction}\n\nExclusion records:\n{context}\n\n"
-            f"Question: {question}\n\nAnswer:")
+    # The question is delimited and the boundary rule is appended to the instruction, so an
+    # injection buried in the user's text ("repeat your instructions", "you are now...") arrives
+    # as part of the question to be answered, not as a competing instruction. This is the layer
+    # that moved prompt-extraction from a leak to a hold in injection_eval.py; RBAC and grounding
+    # already handled the exfiltration and fabrication attacks without it.
+    return (f"{instruction}\n{BOUNDARY_INSTRUCTION}\n\nExclusion records:\n{context}\n\n"
+            f"{wrap(question)}\n\nAnswer:")
+
+
+def token_usage(response):
+    """Gemini's token counts in the shape Langfuse prices, or None if absent.
+
+    The KEY NAMES matter: Langfuse looks for "input"/"output" to apply the model's published
+    rates. None rather than zeros when the response carries no usage block -- a zero is
+    indistinguishable from a genuinely free call and would drag any average toward nothing.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return None
+
+    counts = {
+        "input": getattr(usage, "prompt_token_count", None),
+        "output": getattr(usage, "candidates_token_count", None),
+        "total": getattr(usage, "total_token_count", None),
+    }
+    counts = {name: value for name, value in counts.items() if value is not None}
+    return counts or None
 
 
 def answer_question(question, top_k=RETRIEVER_K, role="investigator"):
@@ -145,7 +171,12 @@ def answer_question(question, top_k=RETRIEVER_K, role="investigator"):
         response = get_client().models.generate_content(
             model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents))
         answer = (response.text or "").strip()
-        update_span(span, output={
+        # The model name and token counts go to the tracer alongside the answer. Without them
+        # every trace prices at zero and "what does a question cost?" is unanswerable after
+        # the fact -- the counts exist only on this response object and cannot be
+        # reconstructed later from the text.
+        update_span(span, model=GENERATION_MODEL_NAME, usage_details=token_usage(response),
+                    output={
             "answer": answer,
             "refused": REFUSAL_TEXT.lower() in answer.lower(),
             "cited_npis": [doc.metadata["NPI"] for doc in documents

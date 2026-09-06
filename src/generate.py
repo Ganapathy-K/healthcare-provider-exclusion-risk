@@ -130,8 +130,15 @@ def token_usage(response):
     return counts or None
 
 
-def answer_question(question, top_k=RETRIEVER_K, role="investigator"):
+def answer_question(question, role, top_k=RETRIEVER_K):
     """Retrieve, enforce the role, ground, answer. Returns (answer, documents).
+
+    `role` is REQUIRED and has no default. It used to default to "investigator", the tier that
+    sees every name and every NPI, so any caller that simply forgot the argument was handed full
+    access silently -- the exact opposite of what rbac.py sets out to do, and unnoticeable in
+    review because the call still reads correctly. With no default the mistake cannot be made:
+    forgetting it is a TypeError at the call site, and every full-access caller has to say so
+    in writing.
 
     The role is applied BETWEEN retrieval and the prompt, which is the only position where it
     means anything: once a record is in the prompt it has reached the model provider, the
@@ -194,7 +201,7 @@ if __name__ == "__main__":
         "What is the capital of France?",          # must refuse -- nothing to do with the data
     ]
     for question in questions:
-        answer, documents = answer_question(question)
+        answer, documents = answer_question(question, role="investigator")
         refused = REFUSAL_TEXT.lower() in answer.lower()
         print(f"Q: {question}")
         print(f"A: {answer}")

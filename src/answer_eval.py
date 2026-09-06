@@ -54,7 +54,7 @@ def run():
     results = []
     for item in GOLDEN_SET:
         try:
-            answer, documents = answer_question(item["question"])
+            answer, documents = answer_question(item["question"], role="investigator")
         except Exception as error:
             results.append((item, "error", f"{type(error).__name__}: {error}"))
             continue

@@ -263,7 +263,7 @@ def run():
     outcomes = []
     for attack in ATTACKS:
         category, question, role, _ = attack
-        result = ask(question, agent=agent, role=role)
+        result = ask(question, role=role, agent=agent)
         outcomes.append(classify(attack, result))
     return outcomes
 

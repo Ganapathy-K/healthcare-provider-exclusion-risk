@@ -124,7 +124,8 @@ def _retrieve():
 @check("an answerable question is ANSWERED, with NPIs cited")
 def _generate_answers():
     from generate import REFUSAL_TEXT, answer_question
-    answer, documents = answer_question("Are there any excluded pharmacies in New York?")
+    answer, documents = answer_question("Are there any excluded pharmacies in New York?",
+                                        role="investigator")
     assert REFUSAL_TEXT.lower() not in answer.lower(), (
         "refused a question the retrieved records answer -- check that build_prompt puts the "
         "NPI in the context; demanding a citation the context cannot supply causes this.")
@@ -136,7 +137,7 @@ def _generate_answers():
 @check("an off-domain question is REFUSED")
 def _generate_refuses():
     from generate import REFUSAL_TEXT, answer_question
-    answer, _ = answer_question("What is the capital of France?")
+    answer, _ = answer_question("What is the capital of France?", role="investigator")
     assert REFUSAL_TEXT.lower() in answer.lower(), f"answered off-domain: {answer[:200]}"
     return "refused"
 
@@ -178,10 +179,11 @@ def _agent():
     from agent import ask, build_agent
     agent = build_agent()
 
-    rag = ask("Are there any excluded providers in Texas?", agent)
+    rag = ask("Are there any excluded providers in Texas?", role="investigator", agent=agent)
     assert rag["tool_used"] == "query_leie_rag", f"routed to {rag['tool_used']}"
 
-    risk = ask("What is the exclusion risk score for provider NPI 1871596098?", agent)
+    risk = ask("What is the exclusion risk score for provider NPI 1871596098?",
+               role="investigator", agent=agent)
     assert risk["tool_used"] == "score_provider_risk", f"routed to {risk['tool_used']}"
     assert "1871596098" in risk["answer"], f"NPI lost: {risk['answer'][:150]}"
     assert "not found" not in risk["answer"], "known NPI reported missing"

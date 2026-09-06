@@ -20,8 +20,10 @@ user WANTS rather than by any word they use: "tell me about 1871596098" and "who
 2. **The encoding logic was a third copy.** Notebook 05, `serving/app.py` and the training path
    each had their own. It now comes from `features.encode_provider_record`.
 
-Still open, and not fixed here: the router has no measured accuracy. There is no set of
-questions with known correct routes, so "6 out of 6 worked" is the entire evidence base.
+The six cases below are a DEMO, not a measurement: they were written by the person who wrote
+the router, right after writing it. The measurement lives in `router_eval.py` -- 17 cases,
+about half of them on the boundary -- and it scored 17/17 on intent and 17/17 on NPI
+extraction (2026-09-03).
 """
 
 import json
@@ -39,6 +41,7 @@ from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
 from features import FEATURE_COLUMNS, encode_provider_record, load_encoding_maps
 from generate import REFUSAL_TEXT, answer_question, get_client
 from injection_guard import BOUNDARY_INSTRUCTION, wrap
+from rbac import DEFAULT_ROLE
 from retrieve import format_sources
 from tracing import flush, trace_span, update_span
 
@@ -126,7 +129,7 @@ def score_provider_risk(npi):
             "means more likely to be excluded). This prioritises review; it is not a finding.")
 
 
-def query_leie_rag(question, role="investigator"):
+def query_leie_rag(question, role):
     """Grounded retrieval over the exclusion records, with sources appended.
 
     Sources are appended only when the question was actually ANSWERED. Listing them under a
@@ -232,8 +235,11 @@ def tool_node(state: AgentState) -> AgentState:
     if state["tool_used"] == "score_provider_risk":
         state["answer"] = score_provider_risk(state["npi"])
     else:
+        # DEFAULT_ROLE is "public", which retrieves nothing. A state that reaches here without a
+        # role is a bug upstream, and the safe reading of a bug is that nobody has been
+        # authenticated -- not that everybody is an investigator.
         state["answer"] = query_leie_rag(state["question"],
-                                         role=state.get("role") or "investigator")
+                                         role=state.get("role") or DEFAULT_ROLE)
     return state
 
 
@@ -247,7 +253,7 @@ def build_agent():
     return graph.compile()
 
 
-def ask(question, agent=None, role="investigator"):
+def ask(question, role, agent=None):
     """Run one question through the agent, as one trace.
 
     The outer span is what makes the inner ones a story rather than three unrelated events:
@@ -281,7 +287,7 @@ if __name__ == "__main__":
     agent = build_agent()
     correct = 0
     for question, expected in cases:
-        result = ask(question, agent)
+        result = ask(question, role="investigator", agent=agent)
         routed_right = result["tool_used"] == expected
         correct += routed_right
         npi_note = f" (npi {result['npi']})" if result["npi"] else ""

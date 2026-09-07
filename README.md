@@ -93,7 +93,7 @@ A few things from the EDA that stuck around as real signal:
 - **Individual providers** (NPPES Entity Type 1) are excluded about 5x more often than organisations (Type 2).
 - Exclusion rates vary a lot by state (Kentucky came out around 2x the national average in the sample).
 
-**A limitation worth stating before someone else finds it:** only 8,306 of the 82,749 LEIE records carry a valid NPI, and 1,183 of those fall inside the 500K NPPES sample. So the positive class is not "excluded providers" — it is the ~10% of exclusions with an NPI recorded, intersected with the sample. And the label itself is "already caught by the OIG", which is not the same as "committing fraud": anyone never investigated is labelled 0 whatever they have done.
+**A limitation worth stating before someone else finds it:** only 8,482 of the 82,749 LEIE records carry a valid NPI (8,306 unique providers; 176 appear twice), and 1,183 of those fall inside the 500K NPPES sample. So the positive class is not "excluded providers" — it is the ~10% of exclusions with an NPI recorded, intersected with the sample. And the label itself is "already caught by the OIG", which is not the same as "committing fraud": anyone never investigated is labelled 0 whatever they have done.
 
 ## The RAG + agent part
 
@@ -118,33 +118,56 @@ None of this was visible without a measured refusal rate — which is why the ne
 
 ## Measuring retrieval, for free
 
-`src/golden_set.py` holds 15 questions built **backwards from the LEIE**: a record was chosen first, then a question written that only those records answer. Every expected NPI is therefore re-derivable from the source file rather than remembered, and `verify()` re-checks them so the set cannot silently rot.
+`src/golden_set.py` holds 29 questions built **backwards from the LEIE**: a record was chosen first, then a question written that only those records answer. Every expected NPI is therefore re-derivable from the source file rather than remembered, and `verify()` re-checks them so the set cannot silently rot.
 
 Rare combinations are used on purpose. *"Which providers were excluded in California?"* has 1,071 correct answers, so any three records score a hit and the question measures nothing. *"Which acupuncturists in New York were excluded?"* has exactly two.
 
-Six of the fifteen must be **refused**, and three of those are **traps** — records that look relevant but do not support the question asked. *"How much money did the excluded pharmacies in New York defraud Medicare of?"* retrieves the pharmacies; the LEIE contains no monetary figures at all. Grounding is only proven where it is tempted.
+Nine of the twenty-nine must be **refused**, and five of those are **traps** — records that look relevant but do not support the question asked. *"How much money did the excluded pharmacies in New York defraud Medicare of?"* retrieves the pharmacies; the LEIE contains no monetary figures at all. Grounding is only proven where it is tempted.
 
 Because the ground truth is an NPI, retrieval can be scored by string comparison: `src/retrieval_eval.py` gives hit rate, MRR and record recall in seconds, with no LLM and no cost.
 
 ### What the measurement changed
 
-| config | hit@10 | MRR | record recall |
+| config | hit@k | MRR | record recall |
 |---|---|---|---|
-| dense only, k=3 (as inherited) | 0.778 | 0.667 | 0.533 |
-| **dense + BM25, k=10 (shipped)** | **0.889** | **0.778** | **0.867** |
+| dense only, k=3 (as inherited) | 0.650 | 0.525 | 0.545 |
+| dense only, k=10 | 0.800 | 0.556 | 0.697 |
+| **dense + BM25, k=10 (shipped)** | **1.000** | **0.827** | **1.000** |
+
+Measured over the 20 answerable questions in the golden set, after the vocabulary fix below.
 
 Two decisions that had been inherited rather than justified:
 
-- **`RETRIEVER_K` 3 → 10.** Hit rate is flat from k=3 to k=10, but *record recall* climbs 0.533 → 0.800. These questions have several correct answers, and returning one of three is a wrong answer that scores as a hit.
-- **BM25 added.** Hit rate being flat under increasing k is the signature of a vocabulary problem, not a depth problem — more results can't reach a record the embedding never places nearby.
+- **`RETRIEVER_K` 3 → 10.** On the dense leg alone, hit rate moves 0.650 → 0.800 and record recall 0.545 → 0.697. These questions have several correct answers, and returning one of three is a wrong answer that still scores as a hit — which is why record recall is the metric that decided k.
+- **BM25 added.** At k=10 the dense leg still misses 4 of the 20 answerable questions and the hybrid misses none. BM25 is what reaches a record by its literal words, and after the vocabulary fix those literal words are finally in the index.
+
+### The three questions that were being refused, and why
+
+Three golden-set questions came back refused with the answer sitting in the file. All three failed the same way — the question used one word and the record used another:
+
+| The question says | The file stores |
+|---|---|
+| proctologist | `PROCTOLOGY` |
+| cardiologists | `CARDIOLOGY` |
+| community mental health centers | `COMM MNTL HLTH CNTR` |
+
+Rewording the question into the file's spelling found every one of them (0/2 → 2/2, 0/1 → 1/1), which is what makes this a vocabulary problem rather than a ranking one. Neither retrieval leg closes it alone: the embedding does not reliably place `CARDIOLOGY` near "cardiologists", and BM25 compares whole tokens with no stemmer, so those are two different words to it. Stemming would not have rescued it either — *-ology* and *-ologist* are two words, not two endings of one word.
+
+`src/vocabulary.py` fixes it at index time instead. Each record's sentence now carries the same specialty and state in the words a person would use — `COMM MNTL HLTH CNTR` **and** "community mental health center", `CO` **and** "Colorado" — while keeping the file's own wording searchable. Retrieval went to hit 1.000, MRR 0.827, record recall 1.000, and end-to-end from 26/29 to **29/29**.
+
+**The honest caveat, because the number is perfect and perfect numbers deserve suspicion:** those expansion rules were written *after* seeing which three questions failed. They are general — every `-OLOGY` specialty, every truncated word in the corpus, every state code, not just the three that broke — but the golden set is no longer independent evidence for them. The next questions added to it will be, and until then 1.000 means "no known failure", not "no failure".
 
 **The BM25 result reversed once, and the reason is the most transferable thing here.** The first ablation said BM25 made things *worse* (MRR 0.667 → 0.630) and rescued nothing. That was measuring a BM25 that had never worked: LangChain's `BM25Retriever` preprocesses with `text.split()` — no lowercasing, no punctuation handling. This corpus is uppercase (`PROCTOLOGY`) and the questions are lowercase (`proctologist`), so every meaningful token missed. It returned three records for every query the whole time; they were simply useless ones. With a real tokenizer (`retrieve.tokenize`) it improves every metric at every k.
 
 **A broken component returns results, not errors.** That sentence describes four separate bugs in this repo.
 
-### End-to-end: 14/15, zero hallucinations
+### End-to-end: 29/29, zero hallucinations
 
-`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have: 8 answered correctly with NPIs cited, 6 refused correctly **including all three traps**, and one wrong refusal — the `PROCTOLOGY` question, where retrieval missed the record, so refusing was correct behaviour given the context. That one is a retrieval failure, not a grounding failure: no exact-match retriever bridges "proctologist" to "PROCTOLOGY".
+`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-07 after the vocabulary fix, saved in `docs/answer_eval_2026-09-07_after_vocabulary.txt`: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
+
+The run before the fix is kept alongside it in `docs/answer_eval_2026-09-07.txt` — 26/29, with the three wrong refusals that motivated `src/vocabulary.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
+
+**A single pass is a sample, not a score.** An earlier run the same morning scored 23/29: two questions returned Gemini 503/500 errors, and one — assisted living facilities in Florida — was refused *with the correct record already retrieved*, which is the expensive failure this section exists to catch. Identical prompts do not give identical runs, so the number to trust is the one that repeats.
 
 ### The router: 17/17, and one myth
 

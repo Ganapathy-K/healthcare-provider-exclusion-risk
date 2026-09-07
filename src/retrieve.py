@@ -1,24 +1,29 @@
 """Fetch the exclusion records most similar in meaning to a question.
 
-Extracted from notebook 04. Dense retrieval only: the question is embedded, and the k nearest
-record-sentences come back.
+Extracted from notebook 04. Hybrid retrieval: the question goes to a dense leg (embedding
+similarity, Qdrant) and a keyword leg (BM25) at the same time, and an EnsembleRetriever
+combines the two rankings. `RETRIEVER_K` is 10.
 
-⚠️ TWO KNOWN WEAKNESSES, recorded rather than quietly fixed. Both are answered in the sibling
-insurance project, and both fixes port over almost unchanged:
+Both halves of that started as inherited defaults -- dense only, k=3 -- and neither was
+changed until `src/golden_set.py` made it measurable. What the measurement said, over the
+20 answerable questions:
 
-1. **k = 3, and no measurement says it should be.** Three records is very few for questions
-   like "which providers were excluded in Texas?", where the honest answer is a list. There is
-   no golden set here yet, so there is no evidence for any value of k -- `src/retrieval_eval.py`
-   in the insurance project computes hit-rate and MRR for free and needs only a set of
-   questions with known answers.
+    dense only,  k=3    hit 0.650   MRR 0.525   record recall 0.545
+    dense only,  k=10   hit 0.800   MRR 0.556   record recall 0.697
+    dense+BM25,  k=10   hit 1.000   MRR 0.827   record recall 1.000   <- shipped
 
-2. **No keyword leg.** Dense embeddings blur exact tokens, and this corpus is full of them:
-   NPIs, exclusion codes like `1128b8`, state abbreviations. Asking about a specific NPI is the
-   case where meaning-search is weakest and BM25 is strongest. The insurance project measured
-   this: dense-only caused 16 wrong refusals out of 37 questions.
+k mattered most for record recall, because these questions have several correct answers and
+returning one of three scores as a hit while missing the rest. BM25 mattered for reaching a
+record by its literal words: at k=10 the dense leg still misses 4 of the 20 answerable
+questions and the hybrid misses none.
 
-Neither is fixed here because extraction should reproduce behaviour first. Fixing them is the
-next piece of real work on this half of the project.
+Those literal words only exist in the index because of `src/vocabulary.py`, which writes each
+record's specialty and state in the words a person would use as well as the words the LEIE
+uses. Before that, three questions were unreachable by either leg -- see that module.
+
+⚠️ The keyword leg only works because of `tokenize` below. With LangChain's default it
+returns results for every query, silently useless ones, and an ablation against it reads as
+evidence that keyword search does not help here.
 """
 
 import re

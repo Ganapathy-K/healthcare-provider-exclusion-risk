@@ -4,9 +4,12 @@ Extracted from notebook 04. Each excluded provider becomes one short sentence --
 specialty, state, date, reason -- because that is what an embedding model can compare. A
 table row cannot be searched by meaning; a sentence can.
 
-Only the 8,306 LEIE records carrying a valid NPI are indexed, matching the labelled dataset:
+Only the 8,482 LEIE records carrying a valid NPI are indexed, matching the labelled dataset:
 the two halves of this project must agree on who counts as excluded, or the agent will answer
-questions about providers the model has never scored.
+questions about providers the model has never scored. Those 8,482 rows cover 8,306 unique NPIs
+-- 176 providers hold two exclusion records each. Retrieval indexes the rows, because each row
+is a separate exclusion event; the labelling join uses the unique NPIs, because a provider is
+excluded or not. Both counts are correct and they are not interchangeable.
 
 ⚠️ Unlike the insurance project, this Qdrant is a SERVER (Docker, localhost:6333), not an
 embedded file. Nothing here works with the container stopped, and the failure is a connection
@@ -25,6 +28,7 @@ from qdrant_client.http.models import Distance, VectorParams
 from config import (EMBEDDING_DIM, EMBEDDING_MODEL_NAME, QDRANT_COLLECTION_NAME,
                     QDRANT_PATH, QDRANT_URL)
 from ingest import load_leie
+from vocabulary import also_written_as
 
 DISTANCE_METRIC = Distance.COSINE
 
@@ -69,10 +73,21 @@ def provider_name(row):
 
 
 def to_sentence(row):
-    """One record as a sentence an embedding model can compare against a question."""
-    return (f"{provider_name(row)} is a {row['SPECIALTY']} in {row['STATE']} "
-            f"who was excluded on {row['EXCLDATE']} "
-            f"for {row['EXCLTYPE']} ({row['GENERAL']}).")
+    """One record as a sentence an embedding model can compare against a question.
+
+    A second sentence carries the same specialty and state in the words a person would use --
+    see `src/vocabulary.py` for the three golden-set questions that made this necessary. It is
+    appended rather than substituted because the file's own wording has to stay searchable
+    too: someone who types COMM MNTL HLTH CNTR must still find the record.
+    """
+    sentence = (f"{provider_name(row)} is a {row['SPECIALTY']} in {row['STATE']} "
+                f"who was excluded on {row['EXCLDATE']} "
+                f"for {row['EXCLTYPE']} ({row['GENERAL']}).")
+
+    forms = also_written_as(row["SPECIALTY"], row["STATE"])
+    if forms:
+        sentence += " Also written as: " + ", ".join(forms) + "."
+    return sentence
 
 
 def build_documents(leie=None):

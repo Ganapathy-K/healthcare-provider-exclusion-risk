@@ -28,6 +28,22 @@ with open(ENCODING_MAPS_PATH) as file:
 # the scoring and therefore cannot disagree with it.
 FEATURE_COLUMNS = list(model.get_booster().feature_names)
 
+# 4.5 Decision threshold — read from the model, for the same reason as the column order
+#
+# This file used to compare against a literal 0.5, which was XGBoost's default and matched
+# nothing that had been decided: src/threshold.py derives the cut-off, and this container
+# never saw it, because the Dockerfile copies the app and the artefacts and cannot import
+# src/. So the scorer went on serving the old cut-off no matter what the project decided.
+# src/threshold.py --write now stamps the value onto the booster, and it is read back here.
+#
+# Startup fails loudly if it is missing. A default would let an unstamped model quietly serve
+# a cut-off nobody chose, which is exactly the failure being removed.
+_stamped = model.get_booster().attr("risk_threshold")
+if _stamped is None:
+    raise RuntimeError(
+        "model.ubj carries no risk_threshold attribute. Run: python src/threshold.py --write")
+RISK_THRESHOLD = float(_stamped)
+
 # 4.5 Request schema — categorical fields accepted as raw strings
 class ProviderInput(BaseModel):
     Entity_Type_Code: int
@@ -79,9 +95,13 @@ def health():
 def predict(provider: ProviderInput):
     input_dataframe = encode_input(provider)
     exclusion_probability = float(model.predict_proba(input_dataframe)[0][1])
-    prediction = int(model.predict(input_dataframe)[0])
+
+    # Both fields come off the one comparison. `model.predict()` used to supply `excluded`,
+    # and it applies XGBoost's own internal 0.5 -- so the two fields could and did disagree
+    # about the same provider once the threshold moved off the default.
+    excluded = exclusion_probability >= RISK_THRESHOLD
     return {
-        "excluded": bool(prediction),
+        "excluded": bool(excluded),
         "exclusion_probability": round(exclusion_probability, 4),
-        "risk_tier": "high" if exclusion_probability >= 0.5 else "low",
+        "risk_tier": "high" if excluded else "low",
     }

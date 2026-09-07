@@ -45,9 +45,12 @@ The honest headline is that publishing it did not make it correct. A characteriz
 
 Also done since:
 
-- **Role-based access** on retrieval, filtering before the model sees anything — investigator / analyst (de-identified) / auditor (organisations only) / public (nothing, and the default).
-- **A golden set of 15 questions** built backwards from the LEIE, so retrieval can be scored for free — hit rate, MRR and record recall, with no LLM judge. Three of the questions are traps: records that look relevant but don't support what was asked.
-- **Retrieval measured and changed on that evidence** — `k` 3→10, and a BM25 keyword leg added alongside the embeddings.
+- **The decision threshold checked rather than assumed.** 0.5 looked like a default nobody changed. It is not: `scale_pos_weight=422` already prices a miss at 422 false alarms, and for a model weighted that way 0.5 is the cost-optimal cut-off — the same decision made earlier. Fitting it on out-of-fold training predictions returned 0.37, and 0.45 on test; neither beat 0.5 out of sample. `src/threshold.py` keeps the evidence and prints the curve.
+- **The scoring API was ignoring it.** `serving/app.py` compared against a literal 0.5 and derived `excluded` from `model.predict()`, which applies XGBoost's own internal 0.5 — so no threshold decision could reach the deployed service, and its two output fields could disagree about the same provider. The threshold is now stamped onto the booster and read back from it, the same way that file already gets its column order.
+
+- **Role-based access** on retrieval, filtering before the model sees anything — investigator / analyst (de-identified) / auditor (organisations only) / public (nothing). The role has to be passed; an unrecognised name falls to public rather than through.
+- **A golden set of 29 questions** built backwards from the LEIE, so retrieval can be scored for free — hit rate, MRR and record recall, with no LLM judge. Nine must be refused and five of those are traps: records that look relevant but don't support what was asked.
+- **Retrieval measured and changed on that evidence** — `k` 3→10, a BM25 keyword leg added alongside the embeddings, and each record indexed in a person's words as well as the file's (`CARDIOLOGY` also written as "cardiologist", `COMM MNTL HLTH CNTR` as "community mental health center", `CO` as "Colorado"). That last one took hit rate to 1.000 and record recall to 1.000, and the end-to-end grade from 26/29 to 29/29 — with the caveat that the expansion rules were written after seeing which questions failed.
 
 **RAGAS was deliberately not built.** The golden set provides ground truth, so the pipeline can be graded deterministically and for free. RAGAS's strength is judging *without* ground truth, and on a sibling project its faithfulness metric turned out to be largely penalising that app's own mandated disclaimer.
 

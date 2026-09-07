@@ -1,5 +1,14 @@
 # Healthcare Provider Exclusion Risk
 
+## Live
+
+Two FastAPI services on Cloud Run. Both scale to zero, so the first request takes about a minute to wake up.
+
+- **Agent** — send it a question and it decides whether to score a provider or search the exclusion records: https://healthcare-provider-exclusion-risk-agent-445269150468.us-central1.run.app/docs
+- **Predictor** — give it one NPI, get a risk score: https://healthcare-provider-exclusion-risk-predictor-445269150468.us-central1.run.app/docs
+
+The links land on the interactive API page, because neither service serves anything at `/`.
+
 This is a portfolio project I built to predict which healthcare providers are at risk of being excluded (terminated) by the US OIG, and to let someone ask questions about the exclusion data in plain English.
 
 The problem it's aimed at: a health plan that pays a claim to a provider who has been excluded by the OIG can end up on the hook for that money. Today a lot of that checking is reactive. The idea here is to score providers up front so the risky ones get looked at first, instead of everyone getting reviewed in the order they happen to come in.
@@ -63,7 +72,20 @@ XGBoost, with `scale_pos_weight=422` — the ratio of negatives to positives, wh
 
 The third column is the one deployed. It is lower than the second on every metric, and that is the point: the second column was partly measuring its own answer sheet. The leak was worth about 8 of the 157, so most of the gain is real — and ROC-AUC had been overstated by roughly 6%.
 
-**The cost, stated plainly: it flags 26,149 providers for review instead of 9,027.** Someone has to work that queue. The trade is right for this problem — a missed exclusion is an unrecoverable claim payment, a false flag is one review — but the threshold that sets it is a capacity decision belonging to whoever staffs the queue, not a statistical one.
+## The threshold
+
+A provider is flagged when the model scores them above 0.5. That looks like a library default nobody changed, so it was checked rather than assumed — `src/threshold.py`.
+
+It is not a default. Training with `scale_pos_weight=422` already tells the model that missing one excluded provider is as bad as opening 422 files nobody needed to open, and for a model weighted that way 0.5 **is** the cost-optimal cut-off. Weighting and moving the cut-off are the same lever pulled in two different places:
+
+| | flags when |
+|---|---|
+| the weighted model, at 0.5 | true probability > 1 / (1 + 422) |
+| the cost rule, `422 × p > (1 − p)` | true probability > 1 / (1 + 422) |
+
+`threshold.py` fits it anyway, on out-of-fold predictions over the training rows only — choosing it on the test split would repeat at the decision layer the same mistake the encoding maps made at the feature layer. It returns **0.37** on the training rows and **0.45** on the test rows. Neither beats 0.5 out of sample under the cost rule that produced them (59,752 at 0.5 against 60,735 at 0.37), and the whole surface is flat to about 4%. So 0.5 stays, now for a reason rather than by inheritance.
+
+**The cost, stated plainly: it flags 26,149 providers for review to catch 157 of the 237.** Someone has to work that queue, and 422 is the number that decides how long it is. That figure belongs to whoever staffs the review, not to this repo — `threshold.py` prints the whole curve, including the ends where the model flags nobody or everybody.
 
 A few things from the EDA that stuck around as real signal:
 

@@ -23,6 +23,7 @@ proves the refusal fires when it should. That is the next piece of work.
 import sys
 
 from google import genai
+from google.genai import types
 
 from config import GENERATION_MODEL_NAME, GOOGLE_API_KEY, RETRIEVER_K
 from injection_guard import BOUNDARY_INSTRUCTION, wrap
@@ -175,8 +176,13 @@ def answer_question(question, role, top_k=RETRIEVER_K):
         return REFUSAL_TEXT, []
 
     with trace_span("generate", as_type="generation", question=question) as span:
+        # temperature 0 here for the same reason as the router in agent.py: this answer is
+        # graded by whether it cites the right NPI, and a grade that moves between two runs of
+        # the same question cannot be read. It does not buy determinism -- two runs at 0 still
+        # disagreed there -- it only removes the variation that is ours to remove.
         response = get_client().models.generate_content(
-            model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents))
+            model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents),
+            config=types.GenerateContentConfig(temperature=0))
         answer = (response.text or "").strip()
         # The model name and token counts go to the tracer alongside the answer. Without them
         # every trace prices at zero and "what does a question cost?" is unanswerable after

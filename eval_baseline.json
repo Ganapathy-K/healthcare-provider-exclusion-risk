@@ -1,8 +1,8 @@
 {
   "k": 10,
   "questions": 20,
-  "hit_rate": 0.85,
-  "mrr": 0.6256,
-  "record_recall": 0.7576,
+  "hit_rate": 1.0,
+  "mrr": 0.8267,
+  "record_recall": 1.0,
   "records_expected": 33
 }

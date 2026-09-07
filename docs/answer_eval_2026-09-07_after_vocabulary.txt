@@ -1,0 +1,62 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|##########| 103/103 [00:00<00:00, 12846.45it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+OK    answered_correct   Which acupuncturists in New York were excluded?
+        cited 2/2
+OK    answered_correct   Were any ambulance companies in Kentucky excluded?
+        cited 2/2
+OK    answered_correct   Which adult day care facilities in Missouri were excluded?
+        cited 2/2
+OK    answered_correct   Were any allergists or immunologists in Maryland excluded?
+        cited 2/2
+OK    answered_correct   Which adult homes in Texas were excluded?
+        cited 3/3
+OK    answered_correct   Was a proctologist ever excluded?
+        cited 1/1
+OK    answered_correct   Has anyone working in phlebotomy been excluded?
+        cited 1/1
+OK    answered_correct   Was a billing service company excluded?
+        cited 1/1
+OK    answered_correct   Has a paramedic technician been excluded?
+        cited 1/1
+OK    answered_correct   Were any ambulance companies in California excluded?
+        cited 2/2
+OK    answered_correct   Which anesthesiologists in Colorado were excluded?
+        cited 2/2
+OK    answered_correct   Were any assisted living facilities in Florida excluded?
+        cited 2/2
+OK    answered_correct   Which cardiologists in Colorado were excluded?
+        cited 2/2
+OK    answered_correct   Were any dermatologists in Illinois excluded?
+        cited 2/2
+OK    answered_correct   Which community mental health centers in New York were excluded?
+        cited 2/2
+OK    answered_correct   Were any oxygen equipment suppliers in Maine excluded?
+        cited 2/2
+OK    answered_correct   Was a rural health clinic ever excluded?
+        cited 1/1
+OK    answered_correct   Has an interpreter or translator been excluded?
+        cited 1/1
+OK    answered_correct   Was a home-infusion equipment supplier excluded?
+        cited 1/1
+OK    answered_correct   Has a hotel or lodging business been excluded?
+        cited 1/1
+OK    correct_refusal    What is the capital of France?
+OK    correct_refusal    How do I appeal an OIG exclusion decision?
+OK    correct_refusal    Which insurance companies stopped paying these providers?
+OK    correct_refusal    [TRAP] How much money did the excluded pharmacies in New York defraud M
+OK    correct_refusal    [TRAP] Are any of the excluded providers in Texas now reinstated?
+OK    correct_refusal    [TRAP] What was the name of the patient harmed by the excluded chiropra
+OK    correct_refusal    What are the office phone numbers of the excluded ambulance comp
+OK    correct_refusal    [TRAP] How many years in prison did the excluded pharmacists receive?
+OK    correct_refusal    [TRAP] Which of the excluded providers have since appealed and won rein
+
+29/29 correct
+  answered_correct    20
+  correct_refusal     9

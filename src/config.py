@@ -88,10 +88,23 @@ MODEL_PATH = SERVING_DIR / "model.ubj"
 ENCODING_MAPS_PATH = SERVING_DIR / "encoding_maps.json"
 MLFLOW_TRACKING_URI = (PROJECT_ROOT / "notebooks" / "mlruns").resolve().as_uri()
 
-# The probability above which a provider is called high-risk. 0.5 is the inherited default
-# and has never been tuned against the precision/recall curve notebook 03 already plots --
-# for a queue that prioritises human review, the right threshold is a capacity decision, not
-# a statistical one.
+# Score a provider above this and we send them for review. Below it, we don't.
+#
+# 0.5 looks like a library default that nobody changed. It was checked (see threshold.py) and
+# it is not: training with scale_pos_weight=422 already tells the model that missing one bad
+# provider is as bad as opening 422 files nobody needed to open. For a model weighted that
+# way, 0.5 IS the cost-optimal cut-off -- weighting and moving the cut-off are the same lever,
+# pulled in two different places.
+#
+#   the weighted model flags when its score > 0.5   ->  true probability > 1 / (1 + 422)
+#   the cost rule flags when 422 * p > (1 - p)      ->  true probability > 1 / (1 + 422)
+#
+# Fitting it anyway gave 0.37 on the training rows and 0.45 on the test rows -- both below
+# 0.5, neither beating it out of sample, and the whole surface flat to about 4%. So 0.5 stays,
+# now for a reason rather than by inheritance.
+#
+# What WOULD move it is the business saying a miss is worth something other than 422 files.
+# That is their number, not this file's. `python src/threshold.py` prints the whole curve.
 RISK_THRESHOLD = 0.5
 
 # --- retrieval ---------------------------------------------------------------------------
@@ -113,15 +126,17 @@ QDRANT_COLLECTION_NAME = "leie_exclusions"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 # Was 3, inherited from notebook 04 with nothing behind it. Measured on the golden set
-# (src/ablation.py, 2026-07-27): hit@k is flat from 3 to 10, but RECORD RECALL -- how many of
-# the correct records a list-style question actually gets back -- climbs 0.600 -> 0.867. The
+# (src/ablation.py, re-run 2026-09-07 over 20 answerable questions): on the dense leg alone,
+# going 3 -> 10 moves hit rate 0.650 -> 0.800 and RECORD RECALL -- how many of the correct
+# records a list-style question actually gets back -- 0.545 -> 0.697. The
 # questions this corpus attracts ("which adult homes in Texas were excluded?") have several
 # correct answers, and returning one of three is a wrong answer that scores as a hit.
 RETRIEVER_K = 10
 
-# Dense (meaning) + BM25 (exact words), measured and kept: at k=10 it improves hit rate
-# 0.778 -> 0.889, MRR 0.667 -> 0.778 and record recall 0.800 -> 0.867, and it is the only
-# thing that reaches the single PHLEBOTOMY record.
+# Dense (meaning) + BM25 (exact words), measured and kept: at k=10 it takes hit rate
+# 0.800 -> 1.000, MRR 0.556 -> 0.827 and record recall 0.697 -> 1.000, and it is the only
+# thing that reaches a record by its literal words -- which is what src/vocabulary.py put
+# into the index in the first place.
 # ⚠️ BM25 is worthless here without src/retrieve.tokenize -- see the warning in that function.
 USE_HYBRID = True
 HYBRID_WEIGHTS = (0.5, 0.5)

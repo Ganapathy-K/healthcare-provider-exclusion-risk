@@ -125,8 +125,7 @@ QDRANT_PATH = os.getenv("QDRANT_PATH") or None
 QDRANT_COLLECTION_NAME = "leie_exclusions"
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
-# Was 3, inherited from notebook 04 with nothing behind it. Measured on the golden set
-# (src/ablation.py, re-run 2026-09-07 over 20 answerable questions): on the dense leg alone,
+# 10, not 3. Measured on the golden set over 20 answerable questions: on the dense leg alone,
 # going 3 -> 10 moves hit rate 0.650 -> 0.800 and RECORD RECALL -- how many of the correct
 # records a list-style question actually gets back -- 0.545 -> 0.697. The
 # questions this corpus attracts ("which adult homes in Texas were excluded?") have several

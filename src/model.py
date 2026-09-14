@@ -95,14 +95,6 @@ def train(save=False, leak_free=False):
     scores = evaluate(model, features_test, target_test)
 
     if save:
-        # Keep the superseded artefacts. They are the only proof of what was actually
-        # deployed, and each recorded baseline describes one of them.
-        if MODEL_PATH.exists():
-            MODEL_PATH.with_name("model_superseded.ubj").write_bytes(MODEL_PATH.read_bytes())
-        if ENCODING_MAPS_PATH.exists():
-            ENCODING_MAPS_PATH.with_name("encoding_maps_superseded.json").write_text(
-                ENCODING_MAPS_PATH.read_text(encoding="utf-8"), encoding="utf-8")
-
         model.save_model(MODEL_PATH)
 
         # The maps MUST ship with the model that was trained on them. serving/app.py looks up
@@ -132,7 +124,5 @@ if __name__ == "__main__":
     if saving:
         print(f"\nsaved -> {MODEL_PATH}")
         print(f"        -> {ENCODING_MAPS_PATH}")
-        print("previous artefacts kept as model_superseded.ubj / "
-              "encoding_maps_superseded.json")
     else:
         print("\nnothing written. re-run with --save to replace the serving artefacts")

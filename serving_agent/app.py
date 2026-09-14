@@ -48,11 +48,10 @@ for candidate in (Path(__file__).resolve().parent / "src",
         sys.path.insert(0, str(candidate))
         break
 
-from agent import build_agent, query_leie_rag, score_provider_risk  # noqa: E402
-from agent import classify_intent, extract_npi  # noqa: E402
-from generate import REFUSAL_TEXT  # noqa: E402
+from agent import build_agent  # noqa: E402
+from agent import ask as run_agent  # noqa: E402
 from rbac import get_role  # noqa: E402
-from retrieve import retrieve  # noqa: E402
+from retrieve import format_sources, retrieve  # noqa: E402
 from vectorstore import get_client, get_embeddings  # noqa: E402
 from config import QDRANT_COLLECTION_NAME  # noqa: E402
 
@@ -105,7 +104,11 @@ class AskResponse(BaseModel):
     the system working correctly, not a malformed request.
     """
 
-    tool: Literal["query_leie_rag", "score_provider_risk"]
+    tool: Literal["query_leie_rag", "score_provider_risk"] = Field(
+        description="The tool whose answer this is.")
+    tools_run: list[Literal["query_leie_rag", "score_provider_risk"]] = Field(
+        description="Every tool that ran, in order. Two entries mean the first answer failed the "
+                    "agent's check and the other tool ran.")
     status: Literal["answered", "refused"]
     role: str = Field(description="The role actually applied, after unknown names fall back "
                                   "to `public`. Echoed so a caller can see a typo took effect.")
@@ -182,7 +185,10 @@ async def health():
 
 @app.post("/ask", response_model=AskResponse, tags=["agent"])
 async def ask(request: AskRequest):
-    """Route the question, run the chosen tool, and say which one ran.
+    """Run the agent, and say which tools ran and whose answer this is.
+
+    The agent itself -- router, tools, check, the role rule for scoring -- lives in
+    `src/agent.py`, so this endpoint, the CLI and the evals all run the same graph.
 
     `asyncio.to_thread` is load-bearing: the router call, the embedding pass and the answer
     call all block for seconds, and awaiting them on the event loop would serialise every
@@ -194,42 +200,20 @@ async def ask(request: AskRequest):
     role = get_role(request.role)
 
     try:
-        decision = await asyncio.to_thread(classify_intent, request.question)
+        result = await asyncio.to_thread(run_agent, request.question, role.name, _agent)
     except Exception as error:
         raise HTTPException(status_code=502,
-                            detail=f"Router failed: {type(error).__name__}: {error}") from error
+                            detail=f"Agent failed: {type(error).__name__}: {error}") from error
 
-    npi = decision["npi"] or extract_npi(request.question)
+    npi = result["npi"]
+    documents = result["documents"]
+    # The graph's answer carries a "Sources:" block for text readers; here the sources go out
+    # as typed fields instead, so the block is taken back off.
+    answer = result["answer"].removesuffix(f"\n\nSources:\n{format_sources(documents)}")
 
-    if decision["intent"] == "risk":
-        # The scoring branch is investigator-only. A risk score is about ONE named provider by
-        # construction, so there is no de-identified version of it: returning a score for an
-        # NPI the caller supplied confirms that provider is in the dataset, which is itself
-        # disclosure. Roles that cannot see identities cannot use this branch at all.
-        if "NPI" not in role.visible_fields:
-            return AskResponse(
-                tool="score_provider_risk", status="refused", role=role.name,
-                answer=f"The '{role.name}' role cannot retrieve provider-level risk scores. "
-                       "Scoring identifies a specific provider.",
-                npi=None, sources=[])
-
-        answer = await asyncio.to_thread(score_provider_risk, npi)
-        return AskResponse(tool="score_provider_risk", status="answered", role=role.name,
-                           answer=answer, npi=npi or None, sources=[])
-
-    try:
-        from generate import answer_question
-        answer, documents = await asyncio.to_thread(
-            answer_question, request.question, role=role)
-    except Exception as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Retrieval pipeline failed: {type(error).__name__}: {error}") from error
-
-    refused = REFUSAL_TEXT.lower() in answer.lower()
     # Built from what each record actually carries, so a redacted field is absent rather than
     # rendered as the string "None" -- which would leak the SHAPE of what was withheld.
-    sources = [] if refused else [
+    sources = [
         Source(**{key: value for key, value in (
             ("npi", doc.metadata.get("NPI")),
             ("name", doc.metadata.get("NAME")),
@@ -242,8 +226,9 @@ async def ask(request: AskRequest):
     ]
 
     return AskResponse(
-        tool="query_leie_rag",
-        status="refused" if refused else "answered",
+        tool=result["tool_used"],
+        tools_run=result["tools_run"],
+        status="refused" if result["refused"] else "answered",
         role=role.name,
         answer=answer,
         npi=npi if "NPI" in role.visible_fields and npi else None,

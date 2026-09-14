@@ -1,6 +1,6 @@
 """Build the labelled dataset: NPPES providers, tagged with whether the OIG has excluded them.
 
-Extracted from notebook 01. Two public US datasets:
+Two public US datasets:
 
   NPPES  the national registry of every healthcare provider and their NPI number
   LEIE   the OIG's List of Excluded Individuals/Entities -- providers already excluded

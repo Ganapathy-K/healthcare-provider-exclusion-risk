@@ -1,6 +1,6 @@
 """Fetch the exclusion records most similar in meaning to a question.
 
-Extracted from notebook 04. Hybrid retrieval: the question goes to a dense leg (embedding
+Hybrid retrieval: the question goes to a dense leg (embedding
 similarity, Qdrant) and a keyword leg (BM25) at the same time, and an EnsembleRetriever
 combines the two rankings. `RETRIEVER_K` is 10.
 

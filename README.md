@@ -26,16 +26,12 @@ The raw and processed data files are not committed to the repo (they're large an
 
 ## What's in here
 
-The runnable code lives in `src/`. The six notebooks below are the record of how it was built and are no longer the source of truth:
+The runnable code lives in `src/`. Two notebooks show the analysis behind it:
 
-1. `01_data_ingestion` – load NPPES + LEIE, join them, build the labelled dataset.
-2. `02_eda` – exploring the data and where the exclusion signal actually is.
-3. `03_modelling` – training the risk model.
-4. `04_rag_pipeline` – embedding the LEIE records and setting up retrieval so you can ask questions over them.
-5. `05_langgraph` – a small agent that decides whether a question needs a lookup over the exclusion data or a risk score for a specific provider.
-6. `06_serving` – wrapping the model as an API.
+1. `02_eda` – exploring the data and where the exclusion signal actually is.
+2. `03_modelling` – training the risk model.
 
-`src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `retrieval_eval` · `ablation` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
+`src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `retrieval_eval` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
 
 `serving/` is the scorer's deployable (model file, FastAPI app, Dockerfile); `serving_agent/` is the agent's.
 
@@ -99,7 +95,14 @@ A few things from the EDA that stuck around as real signal:
 
 On top of the scoring model I added a retrieval layer over the LEIE records. The exclusion records get embedded with a sentence-transformers model and stored in Qdrant, and a question gets answered from the retrieved records using Gemini, grounded only in what was retrieved rather than the model's own memory.
 
-The agent (built with LangGraph) sits in front of that. It reads the question and routes it: if you're asking for a provider's risk score it pulls the NPI and runs the model, if you're asking about the exclusion data generally it goes to retrieval. The Qdrant store is rebuilt from the data by `src/vectorstore.py`, so it isn't committed either.
+The agent (built with LangGraph) sits in front of that. It reads the question and picks a tool: if you're asking for a provider's risk score it pulls the NPI and runs the model, if you're asking about the exclusion data generally it goes to retrieval. Then an LLM check reads the tool's answer. If the answer doesn't answer the question and the other tool can run, the other tool runs once — two tool runs at most, so the agent always stops. The tool's answer is wrapped in its own boundary before the check reads it, because retrieved records are text an attacker could have written into.
+
+```
+router → tool → check → done
+                   └──→ switch → tool (second and last run)
+```
+
+One limit: the indexed sentences don't contain NPIs, so retrieval can't find a record by its NPI. When the scorer can't find an NPI, switching to retrieval doesn't rescue it. The Qdrant store is rebuilt from the data by `src/vectorstore.py`, so it isn't committed either.
 
 ### The refusal bug, which is the most useful thing in this repo
 
@@ -165,7 +168,7 @@ Rewording the question into the file's spelling found every one of them (0/2 →
 
 `src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-07 after the vocabulary fix, saved in `docs/answer_eval_2026-09-07_after_vocabulary.txt`: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
 
-The run before the fix is kept alongside it in `docs/answer_eval_2026-09-07.txt` — 26/29, with the three wrong refusals that motivated `src/vocabulary.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
+The run before the fix scored 26/29, with the three wrong refusals that motivated `src/vocabulary.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
 
 **A single pass is a sample, not a score.** An earlier run the same morning scored 23/29: two questions returned Gemini 503/500 errors, and one — assisted living facilities in Florida — was refused *with the correct record already retrieved*, which is the expensive failure this section exists to catch. Identical prompts do not give identical runs, so the number to trust is the one that repeats.
 
@@ -205,7 +208,7 @@ Two limits, stated rather than left to be found: **a role in the request body is
 Two Cloud Run services, deliberately separate — the scorer's dependencies are pandas and xgboost, the agent needs torch, langgraph and the Gemini SDK, and folding them together would risk a working deployment to save one deploy.
 
 - **Scorer** — `serving/`, FastAPI + Docker. `src/smoke_test.py` asserts the deployed artefact is the weighted model.
-- **Agent** — `serving_agent/`, `POST /ask` and `GET /health`. Routes to the model or to grounded retrieval, enforces roles, refuses when the records don't support an answer, and traces every request.
+- **Agent** — `serving_agent/`, `POST /ask` and `GET /health`. Runs the same agent as `src/agent.py`: picks the model or grounded retrieval, checks the answer and can try the other tool once, enforces roles, refuses when the records don't support an answer, and traces every request. The response's `tools_run` lists every tool that ran.
 
 Qdrant runs **embedded** in the agent's container: a read-only directory baked into the image, selected by `QDRANT_PATH`, with the Docker server still the default locally. Cloud Run gives one container and one port, so a Qdrant server would have meant a second service to run, pay for and secure, for an index of 8,482 records.
 
@@ -237,7 +240,6 @@ python src/vectorstore.py            # collection status; --rebuild reindexes th
 # free, no LLM, seconds each
 python src/golden_set.py             # re-verify every expected NPI against the LEIE
 python src/retrieval_eval.py 3 5 10  # hit rate, MRR, record recall at each k
-python src/ablation.py               # dense vs dense+BM25, at every k
 python src/rbac.py                   # what each role sees for the same question
 
 # each costs a handful of Gemini calls
@@ -248,7 +250,7 @@ python src/smoke_test.py             # everything above, as pass/fail (11 checks
 
 The agent service runs either way — `QDRANT_PATH=data/qdrant_store python serving_agent/app.py` uses the embedded index with no container running at all.
 
-`src/model.py --save` writes **both** `serving/model.ubj` and `serving/encoding_maps.json`, and keeps the previous pair as `*_superseded`. They have to travel together: a model trained on training-only category means, served with full-data means, would score every provider on numbers it had never seen — with identical column names and order, so nothing would error.
+`src/model.py --save` writes **both** `serving/model.ubj` and `serving/encoding_maps.json`. They have to travel together: a model trained on training-only category means, served with full-data means, would score every provider on numbers it had never seen — with identical column names and order, so nothing would error.
 
 Dependencies in `serving/requirements.txt` are pinned. They weren't until this work, which meant every Cloud Run build pulled whatever was newest that day, on a live service.
 

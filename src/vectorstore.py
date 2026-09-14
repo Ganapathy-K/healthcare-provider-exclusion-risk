@@ -1,6 +1,6 @@
 """Turn LEIE exclusion records into searchable documents and index them in Qdrant.
 
-Extracted from notebook 04. Each excluded provider becomes one short sentence -- name,
+Each excluded provider becomes one short sentence -- name,
 specialty, state, date, reason -- because that is what an embedding model can compare. A
 table row cannot be searched by meaning; a sentence can.
 

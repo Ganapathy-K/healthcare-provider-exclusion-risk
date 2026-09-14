@@ -132,6 +132,5 @@ if __name__ == "__main__":
         print(f"  f1        {model['f1']:.4f}")
         print(f"  roc_auc   {model['roc_auc']:.4f}")
         print(f"\nrecorded -> {BASELINE_PATH}")
-        print("\nRAG/agent behaviour is NOT captured here: it needs the Qdrant container on "
-              f"{__import__('config').QDRANT_URL}, which was not running. Add it before "
-              "extracting notebooks 04 and 05.")
+        print("\nRAG/agent behaviour is NOT captured here: src/smoke_test.py and "
+              "src/eval_gate.py cover it.")

@@ -23,5 +23,4 @@ data/processed/labelled_dataset.parquet
 # The scorer's own service builds from serving/ with its own Dockerfile.
 serving/Dockerfile
 serving/requirements.txt
-serving/*_superseded.*
 serving/server.log

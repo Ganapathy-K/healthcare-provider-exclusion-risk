@@ -1,6 +1,6 @@
 """Answer a question about exclusions from the retrieved records, and nothing else.
 
-Extracted from notebook 04, with one change that is called out below rather than slipped in.
+One change to the prompt is called out below rather than slipped in.
 
 ⚠️ WHAT THE NOTEBOOK'S PROMPT DID, AND WHY IT IS NOT KEPT VERBATIM. It was:
 

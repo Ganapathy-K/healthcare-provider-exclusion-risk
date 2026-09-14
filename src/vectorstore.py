@@ -79,6 +79,10 @@ def to_sentence(row):
     see `src/vocabulary.py` for the three golden-set questions that made this necessary. It is
     appended rather than substituted because the file's own wording has to stay searchable
     too: someone who types COMM MNTL HLTH CNTR must still find the record.
+
+    The NPI is deliberately NOT in the sentence. A ten-digit number means nothing to the
+    meaning search, and adding it blurred it (golden set MRR 0.8267 -> 0.7800). The keyword
+    search carries the NPI instead -- see `retrieve.keyword_tokens`.
     """
     sentence = (f"{provider_name(row)} is a {row['SPECIALTY']} in {row['STATE']} "
                 f"who was excluded on {row['EXCLDATE']} "

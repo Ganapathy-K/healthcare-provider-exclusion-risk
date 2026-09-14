@@ -1,14 +1,14 @@
 """Train, evaluate and save the provider-exclusion classifier.
 
-Extracted from notebook 03. The notebook's chosen configuration is the one below --
+Extracted from the modelling notebook. The notebook's chosen configuration is the one below --
 XGBoost with `scale_pos_weight`, which is how the model is told that excluded providers are
 rare. Without it a classifier scores extremely well by answering "not excluded" to everything,
 since 99.76% of the time that is correct, and quietly misses most of what it exists to find.
 
 ⚠️ WHY THIS FILE WAS WRITTEN. `baseline.py` scored the deployed `serving/model.ubj` and found
 it had **no** `scale_pos_weight` and a learning rate of 0.3, not 0.1 -- it is not the
-configuration notebook 03 selected or the README describes. An earlier, unweighted run was
-copied out of MLflow in notebook 06 and shipped. Measured recall at threshold 0.5: **0.177**.
+configuration the modelling notebook selected or the README describes. An earlier, unweighted run was
+copied out of MLflow and shipped. Measured recall at threshold 0.5: **0.177**.
 
 Only the training configuration is corrected here. The target leakage in the encoding maps
 (see features.py) is a separate defect and is deliberately NOT touched in the same change --
@@ -48,7 +48,7 @@ def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
 
 
 def split(features, target):
-    """Notebook 03's split: stratified, 20% test, seed 42. Stratify is not optional --
+    """The modelling notebook's split: stratified, 20% test, seed 42. Stratify is not optional --
     an unstratified 20% of a 1:422 problem can differ in positive count by enough to move
     every metric on its own."""
     return train_test_split(features, target, test_size=TEST_SIZE,

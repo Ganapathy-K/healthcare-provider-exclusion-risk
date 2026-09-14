@@ -1,6 +1,6 @@
 """Freeze what the pipeline does today, so the refactor can be proved not to have changed it.
 
-The six notebooks are currently the only record of this project's behaviour. Moving that code
+The notebooks were once the only record of this project's behaviour. Moving that code
 into `src/` without a reference means the only available check is "the output still looks
 about right", which catches nothing subtle -- and the subtle failures are the ones that
 matter here: a reordered column, an encoding map fitted differently, a dropped row.

@@ -31,6 +31,7 @@ import sys
 
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
+from rank_bm25 import BM25Okapi
 
 from config import HYBRID_WEIGHTS, RETRIEVER_K, USE_HYBRID
 from vectorstore import build_documents, get_vector_store
@@ -65,17 +66,32 @@ def tokenize(text):
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def keyword_tokens(document):
+    """The words BM25 matches a record on: its sentence, plus its NPI.
+
+    The NPI is added here and not to the sentence, because only the keyword search can use a
+    number: it matches "1972902351" exactly, where the meaning search was blurred by it. This
+    is what lets the agent switch from "the scorer can't find this NPI" to the exclusion record.
+    """
+    return tokenize(document.page_content) + [str(document.metadata["NPI"])]
+
+
 def get_keyword_retriever(top_k=RETRIEVER_K):
-    """Matches by WORD (BM25), over exactly the text that was indexed.
+    """Matches by WORD (BM25), over the indexed text plus each record's NPI.
 
     Built once per process: tokenising 8,482 records on every question is wasted work, since
     the corpus only changes at ingest. `k` is set on the shared index rather than baked into
     a cache key -- it is a different read of the same index, not a different index.
+
+    Built by hand rather than with `from_documents`, so the returned documents keep exactly the
+    dense leg's text: the ensemble merges the two rankings by that text.
     """
     global _bm25_index
     if _bm25_index is None:
-        _bm25_index = BM25Retriever.from_documents(
-            build_documents(), preprocess_func=tokenize)
+        documents = build_documents()
+        _bm25_index = BM25Retriever(
+            vectorizer=BM25Okapi([keyword_tokens(document) for document in documents]),
+            docs=documents, preprocess_func=tokenize)
     _bm25_index.k = top_k
     return _bm25_index
 

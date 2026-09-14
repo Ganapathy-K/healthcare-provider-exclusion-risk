@@ -1,23 +1,23 @@
 """Central configuration for the provider-exclusion pipeline.
 
-Everything the six notebooks hard-coded now lives here once. Three things this fixes, none
+Everything the notebooks hard-coded now lives here once. Three things this fixes, none
 of them cosmetic:
 
-1. **Absolute paths.** Notebooks 01, 02, 03 and 04 each contained
+1. **Absolute paths.** The notebooks each contained
    `Path("D:/Data Science/Visual Studio Code/healthcare-provider-exclusion-risk/data/...")`.
    That path exists on exactly one machine, so the repo cannot run for anyone who clones it
    -- including inside a container, which is where it is meant to end up. Paths are now
    derived from this file's own location.
 
 2. **Constants defined twice.** `qdrant_collection_name`, `embedding_model_name` and
-   `gemini_model_name` were declared independently in notebooks 04 and 05. They agree today.
+   `gemini_model_name` were declared independently by the RAG code and the agent code. They agree today.
    Nothing was keeping them in agreement, and a retrieval pipeline whose two halves point at
    different collections fails in the least obvious way possible: it answers, fluently, from
    the wrong index.
 
-3. **Two different API key names.** Notebook 04 read `GOOGLE_API_KEY`; notebook 05 read
-   `GOOGLE_API_KEY_HEALTHCARE_PROVIDER_TERMINATION`. Whichever was set decided which
-   notebook worked. The project-specific name wins here, with the generic one as a fallback.
+3. **Two different API key names.** The RAG code read `GOOGLE_API_KEY`; the agent code read
+   `GOOGLE_API_KEY_HEALTHCARE_PROVIDER_TERMINATION`. Whichever was set decided which half
+   worked. The project-specific name wins here, with the generic one as a fallback.
 """
 
 import os
@@ -69,7 +69,7 @@ TARGET_COLUMN = "excluded"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
-# Preparation thresholds, inherited from notebook 03. A column more than 30% empty is dropped
+# Preparation thresholds, inherited from the modelling notebook. A column more than 30% empty is dropped
 # rather than imputed; an object column with over 1000 distinct values is treated as an
 # identifier rather than a category.
 MAX_NULL_FRACTION = 0.30

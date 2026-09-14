@@ -1,6 +1,6 @@
 """Turn the labelled NPPES+LEIE dataset into the 16 features the model was trained on.
 
-This is a FAITHFUL reproduction of notebook 03's preparation, not an improved one. It exists
+This is a FAITHFUL reproduction of the modelling notebook's preparation, not an improved one. It exists
 so the refactor can be checked against the notebook's own numbers -- a characterization test
 is only meaningful if it reproduces current behaviour exactly, including the parts that are
 wrong. Two of those are called out below and deliberately left alone.
@@ -96,7 +96,7 @@ DATE_COLUMNS = {
 
 
 def prepare_features(providers_raw, encoding_maps=None):
-    """Reproduce notebook 03's preparation. Returns (X, y, encoding_maps).
+    """Reproduce the modelling notebook's preparation. Returns (X, y, encoding_maps).
 
     Pass `encoding_maps` to APPLY maps fitted elsewhere instead of fitting new ones on this
     data. That is how the leakage in defect 1 is avoided: fit on the training split, then
@@ -171,7 +171,7 @@ def encode_provider_record(record, encoding_maps=None):
     """Encode ONE raw NPPES row into the 16 model features, for scoring a single provider.
 
     This is the row-at-a-time counterpart to `prepare_features`, which works on the whole
-    frame. Notebook 05 and `serving/app.py` each carried their own copy of this logic -- three
+    frame. The agent and `serving/app.py` each carried their own copy of this logic -- three
     implementations of one encoding, any of which could drift from the other two without a
     single error being raised, because XGBoost scores by position and checks nothing.
 

@@ -8,7 +8,7 @@ Every assertion here exists because the corresponding thing was ACTUALLY BROKEN 
 2026-07-27, not because it seemed worth checking:
 
   wrong model deployed      serving/model.ubj had no scale_pos_weight; recall was 0.177
-  wrong model in the agent  notebook 05 loaded a different artefact from MLflow entirely
+  wrong model in the agent  the agent loaded a different artefact from MLflow entirely
   encoding maps mismatched  the maps shipped were fitted on data the model was not
   feature order duplicated  three copies of the column list, XGBoost validates none of it
   refusal on answerable Qs  the NPI was missing from the context the model was shown

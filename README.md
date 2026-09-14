@@ -28,8 +28,8 @@ The raw and processed data files are not committed to the repo (they're large an
 
 The runnable code lives in `src/`. Two notebooks show the analysis behind it:
 
-1. `02_eda` – exploring the data and where the exclusion signal actually is.
-2. `03_modelling` – training the risk model.
+1. `01_eda` – exploring the data and where the exclusion signal actually is.
+2. `02_modelling` – training the risk model.
 
 `src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `retrieval_eval` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
 
@@ -48,11 +48,11 @@ The point of a characterization test is that it asserts behaviour is **unchanged
 | class weighting | `scale_pos_weight=422` | **none** |
 | learning rate | 0.1 | **0.3** (the XGBoost default) |
 
-An earlier, unweighted run had been copied out of MLflow in notebook 06 and shipped. On a problem with one excluded provider per 422, a model never told the classes are imbalanced learns that answering "not excluded" is almost always right. Measured on the held-out split, it caught **42 of 237** excluded providers.
+An earlier, unweighted run had been copied out of MLflow and shipped. On a problem with one excluded provider per 422, a model never told the classes are imbalanced learns that answering "not excluded" is almost always right. Measured on the held-out split, it caught **42 of 237** excluded providers.
 
 **2. The target encodings leaked.** The four target-encoded columns were fitted on the whole dataset before the train/test split, so each test row's own label contributed to the feature it was later scored on. `features.fit_encoding_maps()` now fits on the training rows only.
 
-**3. The agent scored providers with a third, different model.** Notebook 05 loaded XGBoost straight from an MLflow artifact path rather than the deployed file — so the agent was answering with a model nobody had validated or deployed.
+**3. The agent scored providers with a third, different model.** The agent's first version loaded XGBoost straight from an MLflow artifact path rather than the deployed file — so the agent was answering with a model nobody had validated or deployed.
 
 ## The model
 
@@ -102,7 +102,7 @@ router → tool → check → done
                    └──→ switch → tool (second and last run)
 ```
 
-One limit: the indexed sentences don't contain NPIs, so retrieval can't find a record by its NPI. When the scorer can't find an NPI, switching to retrieval doesn't rescue it. The Qdrant store is rebuilt from the data by `src/vectorstore.py`, so it isn't committed either.
+The keyword search also matches each record's NPI, so a question that names an NPI finds the record. That is what lets the switch work in the case that matters most: the scorer can't find an NPI in the provider sample, and retrieval shows it was excluded. The NPI is kept out of the embedded sentence, where it blurred the meaning search (MRR 0.8267 → 0.7800). Roles that may not see NPIs have them removed from the search, so they cannot confirm a named provider's exclusion by asking. The Qdrant store is rebuilt from the data by `src/vectorstore.py`, so it isn't committed either.
 
 ### The refusal bug, which is the most useful thing in this repo
 
@@ -166,7 +166,7 @@ Rewording the question into the file's spelling found every one of them (0/2 →
 
 ### End-to-end: 29/29, zero hallucinations
 
-`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-07 after the vocabulary fix, saved in `docs/answer_eval_2026-09-07_after_vocabulary.txt`: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
+`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-14 with the agent and the NPI keyword search, saved in `docs/answer_eval_results.txt`: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
 
 The run before the fix scored 26/29, with the three wrong refusals that motivated `src/vocabulary.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
 

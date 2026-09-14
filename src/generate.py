@@ -20,6 +20,7 @@ also NOT yet measured: there is no golden set for this half of the project, so n
 proves the refusal fires when it should. That is the next piece of work.
 """
 
+import re
 import sys
 
 from google import genai
@@ -32,6 +33,9 @@ from tracing import trace_span, update_span
 from retrieve import format_sources, retrieve
 
 REFUSAL_TEXT = "The retrieved exclusion records do not answer that."
+
+# Ten digits standing alone: the shape of an NPI in a question.
+NPI_IN_TEXT = re.compile(r"(?<!\d)\d{10}(?!\d)")
 
 # ⚠️ A WARNING THAT BACKFIRED, KEPT HERE BECAUSE IT COST AN HOUR AND WILL RECUR.
 # This instruction first contained the line: "These records concern real, named people and
@@ -158,9 +162,16 @@ def answer_question(question, role, top_k=RETRIEVER_K):
     """
     resolved_role = get_role(role) if isinstance(role, str) else role
 
+    # A role that may not see NPIs may not SEARCH by one either. The keyword search matches an
+    # NPI exactly, and the role filter below runs after the search, so an analyst asking "was
+    # NPI X excluded?" would get X's record back with only the name hidden -- which confirms X
+    # is excluded. The scorer refuses these roles for the same reason.
+    search_text = (question if "NPI" in resolved_role.visible_fields
+                   else NPI_IN_TEXT.sub(" ", question))
+
     with trace_span("retrieve", as_type="retriever", question=question, top_k=top_k,
                     role=resolved_role.name) as span:
-        documents = retrieve(question, top_k=top_k)
+        documents = retrieve(search_text, top_k=top_k)
         retrieved_count = len(documents)
         documents = rbac_apply(documents, resolved_role)
         update_span(span, output={

@@ -18,13 +18,13 @@ user WANTS rather than by any word they use: "tell me about 1871596098" and "who
 
 ⚠️ TWO THINGS CORRECTED DURING EXTRACTION, both worth knowing:
 
-1. **The notebook loaded a different model.** It read the XGBoost model straight from an MLflow
+1. **The first version loaded a different model.** It read the XGBoost model straight from an MLflow
    artifact path (`mlruns/0/models/m-787607a1.../artifacts`) -- which is the OLD unweighted
    model, the one measured at recall 0.177. The agent was therefore answering with a model
    nobody had validated and nobody had deployed. It now loads `serving/model.ubj`, the same
    artefact the live API serves, so the agent and the endpoint cannot disagree.
 
-2. **The encoding logic was a third copy.** Notebook 05, `serving/app.py` and the training path
+2. **The encoding logic was a third copy.** The agent, `serving/app.py` and the training path
    each had their own. It now comes from `features.encode_provider_record`.
 
 The six cases below are a DEMO, not a measurement: they were written by the person who wrote

@@ -7,10 +7,12 @@ Two tools, one router:
 
 The loop: the router picks a tool, the tool answers, and an LLM check reads that answer. When
 the answer does not answer the question and the other tool can run, the other tool runs once.
+When the scorer has nothing to score, code sends the question to RAG without asking the check.
 Two tool runs at most, so the agent cannot loop forever.
 
   router -> tool -> check -> done
                          -> switch -> tool (second and last run)
+            tool (could not score) -> switch -> tool (RAG)
 
 The router is an LLM, not a keyword rule, because the two intents are separated by what the
 user WANTS rather than by any word they use: "tell me about 1871596098" and "who else did what
@@ -134,23 +136,29 @@ def get_lookup():
 def score_provider_risk(npi):
     """Score one provider by NPI. Every failure returns a sentence, never an exception --
     this is a tool an LLM calls, and a traceback is not an answer a user can act on."""
+    return score_npi(npi)[0]
+
+
+def score_npi(npi):
+    """The scorer with its outcome kept: returns (sentence, scored). `scored` is False when
+    there was nothing to score -- no NPI, a malformed one, or one not in the data."""
     if npi in (None, "", "null"):
         return ("No NPI was supplied, so I can't score a specific provider. "
-                "Please include a 10-digit NPI.")
+                "Please include a 10-digit NPI."), False
     try:
         npi_value = int(str(npi).strip())
     except ValueError:
-        return f"'{npi}' is not a valid NPI (expected 10 digits)."
+        return f"'{npi}' is not a valid NPI (expected 10 digits).", False
 
     matches = get_lookup().query("NPI == @npi_value")
     if matches.empty:
-        return f"NPI {npi_value} was not found in the provider dataset."
+        return f"NPI {npi_value} was not found in the provider dataset.", False
 
     features = encode_provider_record(matches.iloc[0], load_encoding_maps())
     probability = float(get_model().predict_proba(features[FEATURE_COLUMNS])[0][1])
     tier = "high" if probability >= RISK_THRESHOLD else "low"
     return (f"Risk score for NPI {npi_value}: {probability:.4f} (risk tier: {tier} — higher "
-            "means more likely to be excluded). This prioritises review; it is not a finding.")
+            "means more likely to be excluded). This prioritises review; it is not a finding."), True
 
 
 def query_leie_rag(question, role):
@@ -184,6 +192,7 @@ class AgentState(TypedDict):
     documents: list         # records behind a RAG answer; empty otherwise
     refused: bool           # RAG refused, or the role may not use the chosen tool
     blocked: bool           # the role may not use the chosen tool -- never retried
+    tool_failed: bool       # the scorer had nothing to score -- goes to RAG without the check
     tools_run: list         # every tool that ran, in order
     next_step: str          # the check's verdict: "done" or "switch"
     previous: dict | None   # the first tool's result, kept while the second tool runs
@@ -296,6 +305,7 @@ def tool_node(state: AgentState) -> AgentState:
     tool = state["tool_used"]
     state["tools_run"] = state["tools_run"] + [tool]
     state["documents"], state["refused"], state["blocked"] = [], False, False
+    state["tool_failed"] = False
 
     if tool == "score_provider_risk":
         # The scoring tool is investigator-only. A risk score is about ONE named provider, so
@@ -306,12 +316,13 @@ def tool_node(state: AgentState) -> AgentState:
                                "scores. Scoring identifies a specific provider.")
             state["refused"], state["blocked"] = True, True
         else:
-            state["answer"] = score_provider_risk(state["npi"])
+            state["answer"], scored = score_npi(state["npi"])
+            state["tool_failed"] = not scored
     else:
         state["answer"], state["documents"], state["refused"] = run_rag(state["question"], role)
 
     # A second run that also fails is no better than the first, so the first answer stands.
-    if state["previous"] and state["refused"]:
+    if state["previous"] and (state["refused"] or state["tool_failed"]):
         state.update(state["previous"])
     return state
 
@@ -333,9 +344,18 @@ def switch_node(state: AgentState) -> AgentState:
 
 
 def after_tool(state: AgentState) -> str:
-    """Stop without a check when there is nothing left to try."""
+    """Stop without a check when there is nothing left to try.
+
+    ⚠️ A SCORE THAT COULD NOT BE COMPUTED GOES STRAIGHT TO RAG, AND CODE DECIDES THAT, NOT THE
+    CHECK. Measured 2026-09-15: the check was given "NPI 9999999999 was not found in the provider
+    dataset." five times at temperature 0 and answered switch, done, done, switch, switch -- so
+    the same failure reached RAG on some runs and dead-ended on others. A failure the scorer
+    already knows about needs no judgement.
+    """
     if state["blocked"] or len(state["tools_run"]) >= MAX_TOOL_RUNS:
         return END
+    if state["tool_failed"]:
+        return "switch"
     return "check"
 
 
@@ -358,7 +378,8 @@ def build_agent():
     graph.add_node("switch", switch_node)
     graph.set_entry_point("router")
     graph.add_edge("router", "tool")
-    graph.add_conditional_edges("tool", after_tool, {"check": "check", END: END})
+    graph.add_conditional_edges("tool", after_tool,
+                                {"check": "check", "switch": "switch", END: END})
     graph.add_conditional_edges("check", after_check, {"switch": "switch", END: END})
     graph.add_edge("switch", "tool")
     return graph.compile()
@@ -374,7 +395,8 @@ def ask(question, role, agent=None):
     with trace_span("agent", as_type="span", question=question, role=role) as span:
         result = agent.invoke({"question": question, "tool_used": "", "npi": "",
                                "answer": "", "role": role, "documents": [],
-                               "refused": False, "blocked": False, "tools_run": [],
+                               "refused": False, "blocked": False, "tool_failed": False,
+                               "tools_run": [],
                                "next_step": "", "previous": None})
         update_span(span, output={"tool": result["tool_used"],
                                   "tools_run": result["tools_run"],
@@ -402,7 +424,8 @@ if __name__ == "__main__":
     correct = 0
     for question, expected in cases:
         result = ask(question, role="investigator", agent=agent)
-        routed_right = result["tool_used"] == expected
+        # The FIRST tool is the routing decision; the final one can differ after a switch.
+        routed_right = result["tools_run"][0] == expected
         correct += routed_right
         npi_note = f" (npi {result['npi']})" if result["npi"] else ""
         print(f"{'OK  ' if routed_right else 'MISS'}  {question}")

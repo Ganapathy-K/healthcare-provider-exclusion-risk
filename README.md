@@ -212,6 +212,32 @@ Two Cloud Run services, deliberately separate — the scorer's dependencies are 
 
 Qdrant runs **embedded** in the agent's container: a read-only directory baked into the image, selected by `QDRANT_PATH`, with the Docker server still the default locally. Cloud Run gives one container and one port, so a Qdrant server would have meant a second service to run, pay for and secure, for an index of 8,482 records.
 
+### Deploying the agent
+
+This command is written down because it was not, and recovering it from `gcloud run services describe` cost time twice. Cloud Run keeps the memory, timeout, concurrency and secret bindings on the service, but `--source` deploys do not inherit them reliably, so every flag is repeated on every deploy. Run it from the repo root, which is where the agent's `Dockerfile` lives:
+
+```
+gcloud run deploy healthcare-provider-exclusion-risk-agent --source . --region us-central1 --memory 4Gi --cpu 1 --timeout 300 --concurrency 160 --max-instances 1 --cpu-boost --allow-unauthenticated --set-env-vars LANGFUSE_HOST=https://us.cloud.langfuse.com --set-secrets GOOGLE_API_KEY_HEALTHCARE_PROVIDER_TERMINATION=gemini-api-key:latest,LANGFUSE_PUBLIC_KEY=langfuse-public-key:latest,LANGFUSE_SECRET_KEY=langfuse-secret-key:latest
+```
+
+It is one line on purpose. Line continuations differ between shells — a backslash in PowerShell is not a continuation — and a deploy command that breaks on paste is the same problem as one that is not written down.
+
+`--max-instances 1` is deliberate: the embedded Qdrant directory takes an exclusive file lock, which is safe because each instance is its own container, and one instance is enough for an index of this size. `--cpu-boost` is what keeps the cold start — torch, MiniLM and a BM25 index built at startup — from reading as a hang.
+
+`.gcloudignore` must exist before this runs. Without it `--source` falls back to `.gitignore`, which excludes `data/`, and the build then **succeeds** and ships a service with no index and no records.
+
+The deploy is not finished when gcloud prints the revision. Two calls confirm it:
+
+```
+curl -s https://healthcare-provider-exclusion-risk-agent-445269150468.us-central1.run.app/health
+
+curl -s -X POST https://healthcare-provider-exclusion-risk-agent-445269150468.us-central1.run.app/ask -H "Content-Type: application/json" -d "{\"question\":\"Give me the risk score for NPI 9999999999\",\"role\":\"investigator\"}"
+```
+
+Health should report `indexed_records: 8482`. The second is the switch path: an NPI that cannot be scored must come back with `tools_run` listing **both** tools, because code — not the LLM check — sends an unscorable NPI to retrieval. One tool in that list means the old build is still serving.
+
+The scorer service deploys from `serving/` with its own Dockerfile. Its exact flags are not recorded here.
+
 ## Observability
 
 `src/tracing.py` (Langfuse) records `route → retrieve → generate` as one linked trace. It is instrumented where this project's failures actually happened, not everywhere.

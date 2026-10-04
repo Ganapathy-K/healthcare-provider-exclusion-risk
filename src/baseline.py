@@ -19,7 +19,6 @@ Run:  python src/baseline.py            # record
 
 import json
 import sys
-from pathlib import Path
 
 import pandas as pd
 import xgboost as xgb

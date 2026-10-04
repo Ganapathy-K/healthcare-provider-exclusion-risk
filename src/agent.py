@@ -53,7 +53,7 @@ from injection_guard import (BOUNDARY_INSTRUCTION, TOOL_BOUNDARY_INSTRUCTION, wr
                              wrap_tool_answer)
 from rbac import DEFAULT_ROLE, get_role
 from retrieve import format_sources
-from tracing import flush, trace_span, update_span
+from tracing import trace_span, update_span
 
 # The columns the encoder needs, kept in agent_columns so `ingest` can write the slim
 # lookup parquet without importing this module's langgraph/Gemini/embedding stack.

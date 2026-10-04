@@ -24,25 +24,19 @@ from sklearn.metrics import (average_precision_score, f1_score, precision_score,
                              recall_score, roc_auc_score)
 from sklearn.model_selection import train_test_split
 
-from config import (ENCODING_MAPS_PATH, EVAL_METRIC, LABELLED_DATASET_PATH, LEARNING_RATE, MAX_DEPTH,
+from config import (ENCODING_MAPS_PATH, LABELLED_DATASET_PATH, LEARNING_RATE, MAX_DEPTH,
                     MODEL_PATH, N_ESTIMATORS, RANDOM_STATE, RISK_THRESHOLD,
                     SCALE_POS_WEIGHT, TARGET_COLUMN, TEST_SIZE)
 from features import FEATURE_COLUMNS, fit_encoding_maps, prepare_features
 
 
 def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
-    """The notebook-03 configuration. `scale_pos_weight` is the one that matters here.
-
-    `aucpr` rather than `auc` as the eval metric for the same reason: with 1 positive per 422
-    negatives, precision-recall describes the minority class the model is actually for, while
-    ROC hides it behind a very large true-negative count.
-    """
+    """The notebook-03 configuration. `scale_pos_weight` is the one that matters here."""
     return xgb.XGBClassifier(
         n_estimators=N_ESTIMATORS,
         max_depth=MAX_DEPTH,
         learning_rate=LEARNING_RATE,
         random_state=RANDOM_STATE,
-        eval_metric=EVAL_METRIC,
         scale_pos_weight=scale_pos_weight,
     )
 

@@ -1,6 +1,6 @@
 """Grade the whole pipeline, not just retrieval: did it answer, refuse, and cite correctly?
 
-`retrieval_eval.py` asks whether the right record came back. This asks what happened next --
+`eval_gate.py` asks whether the right record came back. This asks what happened next --
 whether the model used it, whether it invented anything, and whether it declined when it
 should have. Those are different failures and only the second kind is visible here.
 

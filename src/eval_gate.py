@@ -32,6 +32,7 @@ IMPROVEMENTS DO NOT AUTO-UPDATE THE BASELINE. A gate that ratchets itself record
 happened last rather than what was decided, and a slow decline never trips it.
 
 Run:      python src/eval_gate.py
+Report:   python src/eval_gate.py --report [k ...]   # hit rate, MRR, record recall at each k
 Update:   python src/eval_gate.py --update
 Install:  python src/eval_gate.py --install-hook
 """
@@ -42,7 +43,8 @@ import sys
 from pathlib import Path
 
 from config import RETRIEVER_K
-from retrieval_eval import evaluate
+from golden_set import answerable_items, refusal_items
+from retrieve import retrieve
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # One recorded-numbers file for the whole repo: this gate owns its "retrieval" block.
@@ -73,6 +75,49 @@ def qdrant_is_reachable():
         return True, f"{len(collections)} collection(s)"
     except Exception as error:
         return False, f"{type(error).__name__}: {error}"
+
+
+def evaluate(top_k=RETRIEVER_K):
+    """Hit rate and MRR over the answerable golden questions."""
+    hits = 0
+    reciprocal_ranks = []
+    misses = []
+
+    for item in answerable_items():
+        wanted = set(item["expected_npis"])
+        documents = retrieve(item["question"], top_k=top_k)
+        retrieved = [doc.metadata["NPI"] for doc in documents]
+
+        found_at = next((rank for rank, npi in enumerate(retrieved, start=1)
+                         if npi in wanted), None)
+        if found_at:
+            hits += 1
+            reciprocal_ranks.append(1 / found_at)
+        else:
+            reciprocal_ranks.append(0.0)
+            misses.append(item["question"])
+
+    # How many of ALL the correct records were surfaced, not just the first. A question with
+    # three correct answers and one retrieved scores a hit, which flatters a system asked to
+    # "list the providers" -- this is the number that notices.
+    recalled, expected_total = 0, 0
+    for item in answerable_items():
+        wanted = set(item["expected_npis"])
+        retrieved = {doc.metadata["NPI"] for doc in retrieve(item["question"], top_k=top_k)}
+        recalled += len(wanted & retrieved)
+        expected_total += len(wanted)
+
+    total = len(answerable_items())
+    return {
+        "k": top_k,
+        "questions": total,
+        "hit_rate": hits / total if total else 0.0,
+        "mrr": sum(reciprocal_ranks) / total if total else 0.0,
+        "record_recall": recalled / expected_total if expected_total else 0.0,
+        "records_found": recalled,
+        "records_expected": expected_total,
+        "misses": misses,
+    }
 
 
 def measure():
@@ -146,6 +191,21 @@ def install_hook():
     return hook_path
 
 
+def report(ks):
+    """Hit rate, MRR and record recall at each k, for choosing k -- not for gating."""
+    header = f"{'k':>4}{'hit@k':>9}{'MRR':>8}{'record recall':>16}{'misses':>9}"
+    print(header)
+    print("-" * len(header))
+    for k in ks:
+        result = evaluate(top_k=k)
+        print(f"{k:>4}{result['hit_rate']:>9.3f}{result['mrr']:>8.3f}"
+              f"{result['record_recall']:>10.3f} "
+              f"({result['records_found']}/{result['records_expected']})"
+              f"{len(result['misses']):>7}")
+    print(f"\n{len(refusal_items())} expected-refusal questions are excluded: they have no "
+          "correct record to retrieve.")
+
+
 def main():
     if "--install-hook" in sys.argv:
         print(f"installed: {install_hook()}")
@@ -159,6 +219,10 @@ def main():
         print("  Start it with:  docker start qdrant-healthcare")
         print("  To commit without measuring: git commit --no-verify")
         return 1
+
+    if "--report" in sys.argv:
+        report([int(argument) for argument in sys.argv[2:]] or [3, 5, 8, 10])
+        return 0
 
     baseline = load_baseline()
 

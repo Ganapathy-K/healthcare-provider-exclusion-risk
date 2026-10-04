@@ -30,7 +30,7 @@ The runnable code lives in `src/`. Two notebooks show the analysis behind it:
 1. `01_eda` – exploring the data and where the exclusion signal actually is.
 2. `02_modelling` – training the risk model.
 
-`src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `retrieval_eval` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
+`src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `eval_gate` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
 
 `serving/` holds the model file and its encoding maps; `serving_agent/` is the deployable app.
 
@@ -126,7 +126,7 @@ Rare combinations are used on purpose. *"Which providers were excluded in Califo
 
 Nine of the twenty-nine must be **refused**, and five of those are **traps** — records that look relevant but do not support the question asked. *"How much money did the excluded pharmacies in New York defraud Medicare of?"* retrieves the pharmacies; the LEIE contains no monetary figures at all. Grounding is only proven where it is tempted.
 
-Because the ground truth is an NPI, retrieval can be scored by string comparison: `src/retrieval_eval.py` gives hit rate, MRR and record recall in seconds, with no LLM and no cost.
+Because the ground truth is an NPI, retrieval can be scored by string comparison: `src/eval_gate.py` gives hit rate, MRR and record recall in seconds, with no LLM and no cost.
 
 ### What the measurement changed
 
@@ -255,7 +255,7 @@ Run it with `python src/mcp_server.py` (MCP over stdio). ⚠️ The role is an a
 
 ## What is still not measured
 
-- **No RAGAS.** Deliberate: the golden set gives ground truth, so `retrieval_eval` and `answer_eval` grade the same pipeline deterministically and for free. RAGAS's strength is judging *without* ground truth, and on this project's sibling its faithfulness metric turned out to be ~30% the app's own mandated disclaimer being scored as unfaithful.
+- **No RAGAS.** Deliberate: the golden set gives ground truth, so `eval_gate` and `answer_eval` grade the same pipeline deterministically and for free. RAGAS's strength is judging *without* ground truth, and on this project's sibling its faithfulness metric turned out to be ~30% the app's own mandated disclaimer being scored as unfaithful.
 - **No held-out golden set.** Fifteen questions, all used for every decision above, so they measure fit rather than generalisation.
 - **The `PROCTOLOGY` miss is unfixed.** It needs stemming or query expansion; neither is measured yet.
 - **No authentication, no rate limiting** on either service.
@@ -272,7 +272,7 @@ python src/vectorstore.py            # collection status; --rebuild reindexes th
 
 # free, no LLM, seconds each
 python src/golden_set.py             # re-verify every expected NPI against the LEIE
-python src/retrieval_eval.py 3 5 10  # hit rate, MRR, record recall at each k
+python src/eval_gate.py --report 3 5 10  # hit rate, MRR, record recall at each k
 python src/rbac.py                   # what each role sees for the same question
 
 # each costs a handful of Gemini calls

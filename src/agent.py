@@ -45,7 +45,7 @@ import xgboost as xgb
 from google.genai import types
 from langgraph.graph import END, StateGraph
 
-from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, MODEL_PATH,
+from config import (GENERATION_MODEL_NAME, LABELLED_DATASET_PATH, LOOKUP_COLUMNS, MODEL_PATH,
                     PROVIDER_LOOKUP_PATH, RISK_THRESHOLD)
 from features import FEATURE_COLUMNS, encode_provider_record, load_encoding_maps
 from generate import REFUSAL_TEXT, answer_question, get_client
@@ -54,10 +54,6 @@ from injection_guard import (BOUNDARY_INSTRUCTION, TOOL_BOUNDARY_INSTRUCTION, wr
 from rbac import DEFAULT_ROLE, get_role
 from retrieve import format_sources
 from tracing import trace_span, update_span
-
-# The columns the encoder needs, kept in agent_columns so `ingest` can write the slim
-# lookup parquet without importing this module's langgraph/Gemini/embedding stack.
-from agent_columns import LOOKUP_COLUMNS
 
 ROUTER_PROMPT = (
     "You are the router for a healthcare provider-integrity assistant. "

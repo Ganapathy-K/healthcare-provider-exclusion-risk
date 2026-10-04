@@ -92,6 +92,7 @@ def _baseline():
 
     from baseline import BASELINE_PATH, capture, differences
     recorded = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    recorded.pop("retrieval", None)          # eval_gate.py checks that block
     drift = differences(recorded, capture())
     assert not drift, "\n".join(f"{where}: {was} -> {now}" for where, was, now in drift)
     return f"recall {recorded['model']['recall']:.4f}, roc_auc {recorded['model']['roc_auc']:.4f}"

@@ -61,6 +61,14 @@ LABELLED_DATASET_PATH = PROCESSED_DIR / "labelled_dataset.parquet"
 # and cold-start time scales with image size. Written by `python src/ingest.py --save`; the
 # agent falls back to the full dataset when it is absent.
 PROVIDER_LOOKUP_PATH = PROCESSED_DIR / "provider_lookup.parquet"
+LOOKUP_COLUMNS = [
+    "NPI", "Entity Type Code", "Provider Business Mailing Address Telephone Number",
+    "Provider Enumeration Date", "Last Update Date", "Provider Sex Code",
+    "Healthcare Provider Primary Taxonomy Switch_1", "Is Sole Proprietor",
+    "Healthcare Provider Taxonomy Code_1", "Provider Business Mailing Address State Name",
+    "Provider Business Practice Location Address State Name",
+    "Provider License Number State Code_1",
+]
 
 NUCC_TAXONOMY_URL = "https://nucc.org/images/stories/CSV/nucc_taxonomy_251.csv"
 

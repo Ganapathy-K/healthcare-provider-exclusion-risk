@@ -20,8 +20,9 @@ import sys
 
 import pandas as pd
 
-from config import (LABELLED_DATASET_PATH, LEIE_PATH, NPPES_FILENAME, NPPES_SAMPLE_ROWS,
-                    NPPES_ZIP_PATH, PROCESSED_DIR, PROVIDER_LOOKUP_PATH, TARGET_COLUMN)
+from config import (LABELLED_DATASET_PATH, LEIE_PATH, LOOKUP_COLUMNS, NPPES_FILENAME,
+                    NPPES_SAMPLE_ROWS, NPPES_ZIP_PATH, PROCESSED_DIR, PROVIDER_LOOKUP_PATH,
+                    TARGET_COLUMN)
 
 
 def load_leie():
@@ -78,7 +79,6 @@ def build_labelled_dataset(save=False):
 
         # The slim copy the deployed agent ships with -- same rows, only the columns the
         # risk scorer reads. Written here so it can never drift from the full dataset.
-        from agent_columns import LOOKUP_COLUMNS
         nppes[LOOKUP_COLUMNS].to_parquet(PROVIDER_LOOKUP_PATH, index=False)
 
     return nppes, report

@@ -246,6 +246,17 @@ Both RAG bugs above presented identically — as "it refused." One was retrieval
 
 Tracing **fails open** — every function no-ops when the keys are unset, so the service answers normally when Langfuse is unreachable. Observability that can take down the thing it observes is a liability, not a safeguard.
 
+## MCP server
+
+`src/mcp_server.py` exposes the agent's two tools over the [Model Context Protocol](https://modelcontextprotocol.io). Each tool calls the same function `agent.py` calls, so the model and the access rules cannot drift between the two.
+
+| Tool | Arguments | What it does |
+|------|-----------|--------------|
+| `score_provider_risk_tool` | `npi` | Risk score and tier for one provider |
+| `query_exclusion_records_tool` | `question`, `role="public"` | Cited answer from the exclusion records. The default role retrieves nothing. |
+
+Run it with `python src/mcp_server.py` (MCP over stdio). ⚠️ The role is an argument the caller supplies; a real deployment binds it to the authenticated MCP session instead.
+
 ## What is still not measured
 
 - **No RAGAS.** Deliberate: the golden set gives ground truth, so `retrieval_eval` and `answer_eval` grade the same pipeline deterministically and for free. RAGAS's strength is judging *without* ground truth, and on this project's sibling its faithfulness metric turned out to be ~30% the app's own mandated disclaimer being scored as unfaithful.

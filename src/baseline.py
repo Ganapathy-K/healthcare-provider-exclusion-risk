@@ -109,6 +109,7 @@ if __name__ == "__main__":
         if not BASELINE_PATH.exists():
             raise SystemExit(f"no baseline recorded at {BASELINE_PATH}; run without --check")
         recorded = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+        recorded.pop("retrieval", None)          # eval_gate.py checks that block
         drift = differences(recorded, current)
         if drift:
             print(f"BASELINE DRIFT — {len(drift)} value(s) changed:\n")
@@ -118,6 +119,10 @@ if __name__ == "__main__":
         print("baseline matches — behaviour unchanged")
     else:
         BASELINE_PATH.parent.mkdir(exist_ok=True)
+        if BASELINE_PATH.exists():               # keep eval_gate.py's block
+            retrieval = json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get("retrieval")
+            if retrieval:
+                current["retrieval"] = retrieval
         BASELINE_PATH.write_text(json.dumps(current, indent=2), encoding="utf-8")
         model = current["model"]
         dataset = current["dataset"]

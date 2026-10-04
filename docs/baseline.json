@@ -39,5 +39,13 @@
     "precision": 0.006004,
     "f1": 0.0119,
     "roc_auc": 0.753602
+  },
+  "retrieval": {
+    "k": 10,
+    "questions": 20,
+    "hit_rate": 1.0,
+    "mrr": 0.8267,
+    "record_recall": 1.0,
+    "records_expected": 33
   }
 }

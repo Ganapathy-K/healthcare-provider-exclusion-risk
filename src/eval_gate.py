@@ -45,7 +45,9 @@ from config import RETRIEVER_K
 from retrieval_eval import evaluate
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BASELINE_PATH = PROJECT_ROOT / "eval_baseline.json"
+# One recorded-numbers file for the whole repo: this gate owns its "retrieval" block.
+BASELINE_PATH = PROJECT_ROOT / "docs" / "baseline.json"
+BASELINE_KEY = "retrieval"
 
 # Fixed deliberately rather than following RETRIEVER_K: a gate that scores whatever the app
 # currently defaults to stops comparing like with like the moment that default is tuned.
@@ -89,11 +91,13 @@ def measure():
 def load_baseline():
     if not BASELINE_PATH.exists():
         return None
-    return json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    return json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get(BASELINE_KEY)
 
 
 def save_baseline(measured):
-    BASELINE_PATH.write_text(json.dumps(measured, indent=2) + "\n", encoding="utf-8")
+    recorded = json.loads(BASELINE_PATH.read_text(encoding="utf-8")) if BASELINE_PATH.exists() else {}
+    recorded[BASELINE_KEY] = measured
+    BASELINE_PATH.write_text(json.dumps(recorded, indent=2), encoding="utf-8")
 
 
 def compare(measured, baseline):

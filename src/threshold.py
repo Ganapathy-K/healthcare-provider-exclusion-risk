@@ -112,7 +112,7 @@ def youden_threshold(target, probabilities):
     return float(thresholds[int(np.argmax(recall - false_positive_rate))])
 
 
-def describe(target, probabilities, threshold):
+def threshold_report(target, probabilities, threshold):
     caught, false_alarms, missed = confusion(target, probabilities, threshold)
     flagged = caught + false_alarms
     positives = int(target.sum())
@@ -168,8 +168,8 @@ def main(write=False):
     print(f"\ncost ratio sweep (out-of-fold, {int(train_target.sum())} excluded providers)")
     print(f"{'1 miss = N alarms':>18} {'threshold':>10} {'caught':>8} {'flagged':>10}")
     for ratio in COST_RATIOS:
-        found = describe(train_target, train_probabilities,
-                         cost_threshold(train_target, train_probabilities, ratio))
+        found = threshold_report(train_target, train_probabilities,
+                                 cost_threshold(train_target, train_probabilities, ratio))
         print(f"{ratio:>18,} {found['threshold']:>10.4f} "
               f"{found['caught']:>8,} {found['flagged']:>10,}")
 
@@ -191,7 +191,7 @@ def main(write=False):
 
     print("\nheld-out test split, reported once:")
     for name, threshold in (("inherited", INHERITED_THRESHOLD), ("derived", derived)):
-        found = describe(test_target, test_probabilities, threshold)
+        found = threshold_report(test_target, test_probabilities, threshold)
         print(f"  {name:<14} threshold {found['threshold']:<8} "
               f"caught {found['caught']}/{found['positives']}  "
               f"flagged {found['flagged']:,}  recall {found['recall']}")

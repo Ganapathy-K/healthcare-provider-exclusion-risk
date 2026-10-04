@@ -62,15 +62,11 @@ def build_labelled_dataset(save=False):
     excluded = excluded_npis(leie)
     nppes[TARGET_COLUMN] = nppes["NPI"].isin(excluded).astype(int)
 
-    matched = excluded & set(nppes["NPI"])
     report = {
         "leie_rows": int(len(leie)),
         "leie_with_npi": int(len(excluded)),
         "nppes_rows": int(len(nppes)),
-        "matched_npis": int(len(matched)),
-        "match_rate": len(matched) / len(excluded) if excluded else 0.0,
         "positives": int(nppes[TARGET_COLUMN].sum()),
-        "negatives": int((nppes[TARGET_COLUMN] == 0).sum()),
     }
 
     if save:
@@ -88,21 +84,14 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     saving = "--save" in sys.argv
 
-    dataset, report = build_labelled_dataset(save=saving)
+    _, report = build_labelled_dataset(save=saving)
 
-    print(f"LEIE rows            : {report['leie_rows']:,}")
-    print(f"  with a valid NPI   : {report['leie_with_npi']:,}")
-    print(f"NPPES sample rows    : {report['nppes_rows']:,}")
-    print(f"matched NPIs         : {report['matched_npis']:,}")
-    print(f"match rate LEIE->NPPES: {report['match_rate']:.1%}")
-    print(f"\nexcluded (1)         : {report['positives']:,}")
-    print(f"not excluded (0)     : {report['negatives']:,}")
-    print(f"class ratio          : {report['positives'] / len(dataset):.4%}")
+    print(f"LEIE rows          : {report['leie_rows']:,}")
+    print(f"  distinct NPIs    : {report['leie_with_npi']:,}")
+    print(f"NPPES rows         : {report['nppes_rows']:,}")
+    print(f"excluded (1)       : {report['positives']:,}")
 
     if saving:
         print(f"\nsaved -> {LABELLED_DATASET_PATH}")
     else:
-        print(f"\nnothing written. re-run with --save to rebuild "
-              f"{LABELLED_DATASET_PATH.name}")
-        print("⚠️  rebuilding changes nothing only if NPPES and LEIE are the same files as "
-              "before; run `python src/baseline.py --check` afterwards.")
+        print("\nnothing written. re-run with --save to rebuild the dataset")

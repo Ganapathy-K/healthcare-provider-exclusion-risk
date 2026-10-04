@@ -139,10 +139,7 @@ def format_sources(documents):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
 
-    for question in ["Are there any excluded pharmacies in New York?",
-                     "Which providers were excluded in Texas?",
-                     "Who was excluded for patient abuse?"]:
-        documents = retrieve(question)
-        print(f"Q: {question}  ({len(documents)} records)")
-        print(format_sources(documents))
-        print()
+    question = "Which providers were excluded in Texas?"
+    documents = retrieve(question)
+    print(f"Q: {question}  ({len(documents)} records)")
+    print(format_sources(documents))

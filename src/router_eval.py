@@ -111,11 +111,7 @@ if __name__ == "__main__":
 
     intent_correct = sum(1 for r in results if r[5])
     npi_correct = sum(1 for r in results if r[6])
-    both = sum(1 for r in results if r[5] and r[6])
     total = len(results)
 
     print(f"\nintent accuracy : {intent_correct}/{total} ({intent_correct / total:.0%})")
     print(f"NPI accuracy    : {npi_correct}/{total} ({npi_correct / total:.0%})")
-    print(f"both correct    : {both}/{total} ({both / total:.0%})")
-    print("\nA mis-routed question is not a wrong answer -- it is a CONFIDENT answer from the "
-          "wrong half of the system, which is harder to notice.")

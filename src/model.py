@@ -20,8 +20,7 @@ import sys
 
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import (average_precision_score, f1_score, precision_score,
-                             recall_score, roc_auc_score)
+from sklearn.metrics import recall_score
 from sklearn.model_selection import train_test_split
 
 from config import (ENCODING_MAPS_PATH, LABELLED_DATASET_PATH, LEARNING_RATE, MAX_DEPTH,
@@ -46,10 +45,6 @@ def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
     predictions = (probabilities >= threshold).astype(int)
     return {
         "recall": float(recall_score(target_test, predictions)),
-        "precision": float(precision_score(target_test, predictions, zero_division=0)),
-        "f1": float(f1_score(target_test, predictions, zero_division=0)),
-        "roc_auc": float(roc_auc_score(target_test, probabilities)),
-        "average_precision": float(average_precision_score(target_test, probabilities)),
         "flagged": int(predictions.sum()),
     }
 
@@ -88,15 +83,13 @@ if __name__ == "__main__":
     model, scores, (features_test, target_test) = train(save=saving)
 
     positives = int(target_test.sum())
-    print(f"test set: {len(target_test):,} rows, {positives} excluded providers")
-    print()
-    for key in ("recall", "precision", "f1", "roc_auc", "average_precision"):
-        print(f"  {key:<20}{scores[key]:.4f}")
-    print(f"  {'providers flagged':<20}{scores['flagged']:,}")
-    print(f"\ncaught {round(scores['recall'] * positives)} of {positives} excluded providers")
+    print(f"test rows : {len(target_test):,}, {positives} excluded providers")
+    print(f"recall    : {scores['recall']:.4f}")
+    print(f"flagged   : {scores['flagged']:,}")
+    print(f"caught {round(scores['recall'] * positives)} of {positives} excluded providers")
 
     if saving:
         print(f"\nsaved -> {MODEL_PATH}")
         print(f"        -> {ENCODING_MAPS_PATH}")
     else:
-        print("\nnothing written. re-run with --save to replace the serving artefacts")
+        print("\nnothing written. re-run with --save to replace the model files")

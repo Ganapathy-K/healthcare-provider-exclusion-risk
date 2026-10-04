@@ -47,11 +47,6 @@ FOLDS = 5
 # report that can never say anything.
 INHERITED_THRESHOLD = 0.5
 
-# The ratios printed in the sweep: how many false alarms one missed exclusion is worth. They
-# span the range where the answer actually moves -- below roughly 50 the model flags nobody,
-# above roughly 2500 it flags everybody, and both ends are printed rather than trimmed
-# because the shape of the collapse is the argument for the middle.
-COST_RATIOS = [1, 10, 50, 100, 250, SCALE_POS_WEIGHT, 1000, 2500, 5000, 10000]
 
 
 def out_of_fold_probabilities(raw, train_rows):
@@ -132,14 +127,6 @@ def main(write=False):
 
     print(f"deriving on {len(train_rows):,} training rows, {FOLDS}-fold out-of-fold")
     train_target, train_probabilities = out_of_fold_probabilities(raw, train_rows)
-
-    print(f"\ncost ratio sweep (out-of-fold, {int(train_target.sum())} excluded providers)")
-    print(f"{'1 miss = N alarms':>18} {'threshold':>10} {'caught':>8} {'flagged':>10}")
-    for ratio in COST_RATIOS:
-        found = threshold_report(train_target, train_probabilities,
-                                 cost_threshold(train_target, train_probabilities, ratio))
-        print(f"{ratio:>18,} {found['threshold']:>10.4f} "
-              f"{found['caught']:>8,} {found['flagged']:>10,}")
 
     by_cost = cost_threshold(train_target, train_probabilities, SCALE_POS_WEIGHT)
     by_youden = youden_threshold(train_target, train_probabilities)

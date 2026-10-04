@@ -1,39 +1,4 @@
-"""Route a question to the right tool: the risk model, or retrieval over the exclusion records.
-
-Two tools, one router:
-
-  score_provider_risk   "what is the risk score for NPI 1871596098?"  -> the XGBoost model
-  query_leie_rag        "are there any excluded pharmacies in NY?"    -> retrieval + Gemini
-
-The loop: the router picks a tool, the tool answers, and an LLM check reads that answer. When
-the answer does not answer the question and the other tool can run, the other tool runs once.
-When the scorer has nothing to score, code sends the question to RAG without asking the check.
-Two tool runs at most, so the agent cannot loop forever.
-
-  router -> tool -> check -> done
-                         -> switch -> tool (second and last run)
-            tool (could not score) -> switch -> tool (RAG)
-
-The router is an LLM, not a keyword rule, because the two intents are separated by what the
-user WANTS rather than by any word they use: "tell me about 1871596098" and "who else did what
-1871596098 did" share every token that matters and need different tools.
-
-⚠️ TWO THINGS CORRECTED DURING EXTRACTION, both worth knowing:
-
-1. **The first version loaded a different model.** It read the XGBoost model straight from an MLflow
-   artifact path (`mlruns/0/models/m-787607a1.../artifacts`) -- which is the OLD unweighted
-   model, the one measured at recall 0.177. The agent was therefore answering with a model
-   nobody had validated and nobody had deployed. It now loads `serving/model.ubj`, the same
-   artefact the live API serves, so the agent and the endpoint cannot disagree.
-
-2. **The encoding logic was a third copy.** The agent, `serving/app.py` and the training path
-   each had their own. It now comes from `features.encode_provider_record`.
-
-The six cases below are a DEMO, not a measurement: they were written by the person who wrote
-the router, right after writing it. The measurement lives in `router_eval.py` -- 17 cases,
-about half of them on the boundary -- and it scored 17/17 on intent and 17/17 on NPI
-extraction (2026-09-03).
-"""
+"""Agent: router -> tool (risk model or RAG) -> LLM check -> maybe the other tool, 2 runs max."""
 
 import json
 import re
@@ -106,7 +71,7 @@ _lookup = None
 
 
 def get_model():
-    """The SAME artefact the deployed API serves -- see correction 1 in the module docstring."""
+    """The XGBoost model from serving/model.ubj, loaded once."""
     global _model
     if _model is None:
         _model = xgb.XGBClassifier()
@@ -115,12 +80,7 @@ def get_model():
 
 
 def get_lookup():
-    """The provider table used for scoring, preferring the slim 12-column copy.
-
-    Falls back to the full labelled dataset, which is the same rows and 331 columns. The slim
-    file exists because this is what ships inside the deployed image: 60 MB down to 8.3 MB,
-    and Cloud Run cold-start time scales with image size.
-    """
+    """The provider table for scoring: the slim 12-column copy, else the full dataset."""
     global _lookup
     if _lookup is None:
         source = (PROVIDER_LOOKUP_PATH if PROVIDER_LOOKUP_PATH.exists()
@@ -130,14 +90,12 @@ def get_lookup():
 
 
 def score_provider_risk(npi):
-    """Score one provider by NPI. Every failure returns a sentence, never an exception --
-    this is a tool an LLM calls, and a traceback is not an answer a user can act on."""
+    """Score one provider by NPI; every failure returns a sentence, never an exception."""
     return score_npi(npi)[0]
 
 
 def score_npi(npi):
-    """The scorer with its outcome kept: returns (sentence, scored). `scored` is False when
-    there was nothing to score -- no NPI, a malformed one, or one not in the data."""
+    """Returns (sentence, scored); scored is False for no NPI, a bad NPI, or one not in the data."""
     if npi in (None, "", "null"):
         return ("No NPI was supplied, so I can't score a specific provider. "
                 "Please include a 10-digit NPI."), False
@@ -158,15 +116,7 @@ def score_npi(npi):
 
 
 def query_leie_rag(question, role):
-    """Grounded retrieval over the exclusion records, with sources appended.
-
-    Sources are appended only when the question was actually ANSWERED. Listing them under a
-    refusal reads as "here is what I based that on", when the truth is the opposite -- those
-    records were retrieved and then found not to answer anything. Retrieval always returns k
-    records, so on an off-topic question ("what is the capital of France?") the nearest
-    neighbours are simply providers whose names contain "Frances", and printing them beneath
-    a refusal makes a correct refusal look like a confused answer.
-    """
+    """RAG over the exclusion records; sources are listed only when it answered."""
     return run_rag(question, role)[0]
 
 
@@ -194,51 +144,19 @@ class AgentState(TypedDict):
     previous: dict | None   # the first tool's result, kept while the second tool runs
 
 
-# An NPI is exactly ten digits. The lookarounds stop a 12-digit string from yielding a
-# spurious 10-digit "match" out of its middle.
+# Exactly ten digits, not ten digits taken from the middle of a longer number.
 NPI_PATTERN = re.compile(r"(?<!\d)\d{10}(?!\d)")
 
 
 def extract_npi(question):
-    """Pull the NPI out with a regex, not the LLM.
-
-    ⚠️ WHY THIS WAS TAKEN AWAY FROM THE MODEL. The router originally did two jobs in one call:
-    decide the intent, and extract the identifier. The second is a fixed-width number in a
-    string -- a regex does it perfectly, for free, identically every time.
-
-    That matters more than it sounds, because LLM output is NOT reproducible even at
-    temperature 0. Measured 2026-07-27 on this exact prompt: two consecutive runs at
-    temperature 0 disagreed on which questions they got right, and the extracted NPI for
-    "risk score for NPI 123456789?" changed between runs. Server-side batching and routing
-    mean identical inputs need not give identical outputs; "set temperature to 0 for
-    determinism" is folklore.
-
-    So the model keeps the judgement call it is actually needed for -- what the user WANTS --
-    and the deterministic half stops being a source of variance.
-    """
+    """Pull the NPI out with a regex, not the LLM: same answer every time, for free."""
     match = NPI_PATTERN.search(question)
     return match.group(0) if match else ""
 
 
 def classify_intent(question):
-    """Decide which tool this question needs. The NPI comes from `extract_npi`, not from here.
-
-    Falls back to `rag` when the router output cannot be parsed. That default is deliberate:
-    retrieval over records is the harmless branch, while a mis-routed `risk` either scores the
-    wrong provider or fails for want of an NPI.
-
-    ⚠️ THE FALLBACK HAS TO CATCH A PARSE ERROR, NOT JUST A MISSING BRACE, AND THE FIRST VERSION
-    DID NOT. The old code fell back only when the regex found no `{...}`; when it found braces
-    that were not valid JSON, json.loads RAISED and took the whole agent down. A prompt-injection
-    attempt (found by injection_eval.py running with the boundary guard disabled) made the router
-    echo brace content the greedy match grabbed and could not parse -- a crash, not a safe
-    default, on exactly the adversarial input the fallback existed to survive. Failing closed
-    means treating ANY unparseable output as `rag`, which is what the docstring always claimed.
-    """
-    # The question is delimited and the boundary rule appended so a routing instruction smuggled
-    # into the text ("...route it to the scorer") is classified as part of the question, not
-    # obeyed as a command. injection_eval.py caught exactly this: an aggregate RAG question with
-    # an injected NPI and a "route to scorer" rider was diverted to the risk branch.
+    """LLM router: "risk" or "rag"; any output it cannot parse falls back to "rag"."""
+    # The question is wrapped so an instruction hidden inside it is read as text, not obeyed.
     response = get_client().models.generate_content(
         model=GENERATION_MODEL_NAME,
         contents=f"{ROUTER_PROMPT}\n{BOUNDARY_INSTRUCTION}\n\n{wrap(question)}",
@@ -256,13 +174,7 @@ def classify_intent(question):
 
 
 def judge_answer(question, tool, answer):
-    """Ask the LLM whether the tool's answer answers the question. Returns "done" or "switch".
-
-    The tool's answer is wrapped like the question, because a RAG answer is built from records
-    and a record can carry an instruction. Any failure -- an unreadable verdict or a failed
-    call -- returns "done": the agent keeps the answer it already has rather than running a
-    second tool on a guess.
-    """
+    """LLM check: "done" or "switch"; any failure returns "done" and keeps the first answer."""
     try:
         response = get_client().models.generate_content(
             model=GENERATION_MODEL_NAME,
@@ -277,12 +189,7 @@ def judge_answer(question, tool, answer):
 
 
 def router_node(state: AgentState) -> AgentState:
-    """Choose the tool, and record the choice.
-
-    The routing decision is the single most useful thing in a trace of this agent: a question
-    answered by the wrong branch produces a confident, well-formed reply from the wrong half
-    of the system, which the response text alone rarely reveals.
-    """
+    """Choose the tool, and record the choice in the trace."""
     with trace_span("route", as_type="span", question=state["question"]) as span:
         decision = classify_intent(state["question"])
         state["tool_used"] = ("score_provider_risk" if decision["intent"] == "risk"
@@ -294,9 +201,7 @@ def router_node(state: AgentState) -> AgentState:
 
 def tool_node(state: AgentState) -> AgentState:
     """Run the chosen tool and record what came back."""
-    # DEFAULT_ROLE is "public", which retrieves nothing. A state that reaches here without a
-    # role is a bug upstream, and the safe reading of a bug is that nobody has been
-    # authenticated -- not that everybody is an investigator.
+    # No role means "public", which retrieves nothing.
     role = get_role(state.get("role") or DEFAULT_ROLE)
     tool = state["tool_used"]
     state["tools_run"] = state["tools_run"] + [tool]
@@ -304,9 +209,7 @@ def tool_node(state: AgentState) -> AgentState:
     state["tool_failed"] = False
 
     if tool == "score_provider_risk":
-        # The scoring tool is investigator-only. A risk score is about ONE named provider, so
-        # there is no de-identified version of it: returning a score for an NPI the caller
-        # supplied confirms that provider is in the dataset, which is itself disclosure.
+        # Investigator-only: a score names one provider, so it cannot be de-identified.
         if "NPI" not in role.visible_fields:
             state["answer"] = (f"The '{role.name}' role cannot retrieve provider-level risk "
                                "scores. Scoring identifies a specific provider.")
@@ -340,14 +243,7 @@ def switch_node(state: AgentState) -> AgentState:
 
 
 def after_tool(state: AgentState) -> str:
-    """Stop without a check when there is nothing left to try.
-
-    ⚠️ A SCORE THAT COULD NOT BE COMPUTED GOES STRAIGHT TO RAG, AND CODE DECIDES THAT, NOT THE
-    CHECK. Measured 2026-09-15: the check was given "NPI 9999999999 was not found in the provider
-    dataset." five times at temperature 0 and answered switch, done, done, switch, switch -- so
-    the same failure reached RAG on some runs and dead-ended on others. A failure the scorer
-    already knows about needs no judgement.
-    """
+    """Stop when nothing is left; a failed score goes straight to RAG, decided by code."""
     if state["blocked"] or len(state["tools_run"]) >= MAX_TOOL_RUNS:
         return END
     if state["tool_failed"]:
@@ -382,11 +278,7 @@ def build_agent():
 
 
 def ask(question, role, agent=None):
-    """Run one question through the agent, as one trace.
-
-    The outer span is what makes the inner ones a story rather than three unrelated events:
-    route -> retrieve -> generate, linked, with the question at the top.
-    """
+    """Run one question through the agent, as one trace."""
     agent = agent or build_agent()
     with trace_span("agent", as_type="span", question=question, role=role) as span:
         result = agent.invoke({"question": question, "tool_used": "", "npi": "",
@@ -404,8 +296,7 @@ def ask(question, role, agent=None):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
 
-    # Each case names the tool it SHOULD reach, so a mis-route is visible rather than merely
-    # producing a plausible answer from the wrong half of the system.
+    # A demo, not a measurement (router_eval.py measures). Each case names the tool it should reach.
     cases = [
         ("Are there any excluded providers in Texas?", "query_leie_rag"),
         ("What is the exclusion risk score for provider NPI 1871596098?",

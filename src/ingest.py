@@ -1,20 +1,4 @@
-"""Build the labelled dataset: NPPES providers, tagged with whether the OIG has excluded them.
-
-Two public US datasets:
-
-  NPPES  the national registry of every healthcare provider and their NPI number
-  LEIE   the OIG's List of Excluded Individuals/Entities -- providers already excluded
-
-The label is the join: a provider is `excluded = 1` if their NPI appears in the LEIE. There
-is no free lunch in that definition and it is worth stating plainly -- this predicts *who
-looks like the providers already caught*, which is not the same as *who is committing fraud*.
-Anyone the OIG has never investigated is labelled 0 whatever they have done.
-
-NPPES ships as a ~1 GB zip and is read directly out of it rather than extracted: unzipping
-costs several gigabytes on disk to produce a file that is read once, and pandas can stream
-from the archive member. Only the first 500,000 rows are taken, which is what every number
-recorded in docs/baseline.json describes.
-"""
+"""Build the labelled dataset: NPPES providers, excluded = 1 when their NPI is in the LEIE."""
 
 import sys
 
@@ -26,17 +10,12 @@ from config import (LABELLED_DATASET_PATH, LEIE_PATH, LOOKUP_COLUMNS, NPPES_FILE
 
 
 def load_leie():
-    """The full exclusions list. Small enough to read whole.
-
-    latin-1, not utf-8: the OIG file contains bytes that are not valid utf-8, and pandas
-    raises rather than guessing. latin-1 maps every byte to something, so it never fails --
-    which is the right trade for a file whose names occasionally carry accents.
-    """
+    """Read the whole LEIE file (latin-1, because it has bytes that are not valid utf-8)."""
     return pd.read_csv(LEIE_PATH, encoding="latin-1", low_memory=False)
 
 
 def load_nppes(rows=NPPES_SAMPLE_ROWS):
-    """Read the provider registry straight out of the zip, without extracting it."""
+    """Read the first 500,000 NPPES rows straight from the zip."""
     import zipfile
 
     with zipfile.ZipFile(NPPES_ZIP_PATH) as archive:
@@ -45,17 +24,12 @@ def load_nppes(rows=NPPES_SAMPLE_ROWS):
 
 
 def excluded_npis(leie):
-    """The NPIs the OIG has excluded.
-
-    NPI 0 is dropped: the LEIE uses it as a placeholder for records where no NPI was
-    recorded, so keeping it would label every NPPES row whose NPI failed to parse as
-    excluded. It is a missing value wearing a number's clothing.
-    """
+    """The set of excluded NPIs, without NPI 0 (the LEIE's placeholder for a missing NPI)."""
     return set(leie.loc[leie["NPI"] != 0, "NPI"])
 
 
 def build_labelled_dataset(save=False):
-    """Join the two sources into the labelled dataset. Returns (dataframe, report)."""
+    """Set excluded = 1 where the NPI is in the LEIE set. Returns (dataframe, report)."""
     leie = load_leie()
     nppes = load_nppes()
 
@@ -72,9 +46,7 @@ def build_labelled_dataset(save=False):
     if save:
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
         nppes.to_parquet(LABELLED_DATASET_PATH, index=False)
-
-        # The slim copy the deployed agent ships with -- same rows, only the columns the
-        # risk scorer reads. Written here so it can never drift from the full dataset.
+        # The slim copy the agent ships with: same rows, only the columns the scorer reads.
         nppes[LOOKUP_COLUMNS].to_parquet(PROVIDER_LOOKUP_PATH, index=False)
 
     return nppes, report

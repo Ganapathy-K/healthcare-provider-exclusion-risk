@@ -1,29 +1,4 @@
-"""Derive the decision threshold from the data instead of inheriting XGBoost's 0.5.
-
-`RISK_THRESHOLD` was 0.5 -- the library default, never chosen for this problem. 0.5 is the
-correct cut-off only when the two classes are equally common and the two mistakes cost the
-same. Here one provider in 422 is excluded, and a missed exclusion pays out a fraudulent
-claim while a false flag costs one analyst review. Neither condition holds, so the inherited
-default was not a model setting: it was an unstated claim about cost.
-
-The threshold is derived on OUT-OF-FOLD predictions over the training rows only. Deriving it
-on the test split would repeat, at the decision layer, the same mistake the target encodings
-made at the feature layer -- choosing a number using the answer sheet it is later scored
-against. The test split is used once, at the end, to report what the derived threshold does.
-
-Two criteria are computed, and they are meant to agree or disagree in public:
-
-  cost      minimises `cost_ratio * false_negatives + false_positives`. The ratio used is
-            SCALE_POS_WEIGHT (422), which is not a new assumption: weighting the positive
-            class by 422 during training already says a missed positive costs 422 false
-            alarms. Using the same figure at the decision layer keeps training and serving
-            telling one story.
-  youden    maximises `recall - false_positive_rate`. It uses no cost figure at all, so
-            agreement between the two is evidence the answer is not an artefact of the ratio.
-
-Run:  python src/threshold.py              # derive, print the sweep, change nothing
-      python src/threshold.py --write      # also write it to config.py
-"""
+"""Pick the threshold on out-of-fold train scores, check it once on test rows (--write saves it)."""
 
 import re
 import sys
@@ -42,19 +17,12 @@ from model import build_model
 CONFIG_PATH = PROJECT_ROOT / "src" / "config.py"
 FOLDS = 5
 
-# What the project shipped before this file existed. Kept as a literal rather than read from
-# RISK_THRESHOLD, which this run overwrites -- comparing the new number against itself is a
-# report that can never say anything.
+# The threshold in use today, printed next to the derived one for comparison.
 INHERITED_THRESHOLD = 0.5
 
 
-
 def out_of_fold_probabilities(raw, train_rows):
-    """Score every training row with a model that was not trained on it.
-
-    Each fold refits the encoding maps as well as the model, because a map fitted on rows the
-    fold is about to score is the leak this project already found once.
-    """
+    """5 folds: each fits on 320k train rows and scores the other 80k; every row gets one score."""
     target = raw.loc[train_rows, TARGET_COLUMN]
     probabilities = pd.Series(index=train_rows, dtype=float)
 
@@ -77,7 +45,7 @@ def out_of_fold_probabilities(raw, train_rows):
 
 
 def cost_threshold(target, probabilities, cost_ratio):
-    """The cut-off minimising `cost_ratio * misses + false alarms`."""
+    """The score where the total cost is smallest: 0 × TP + 422 × FN + 0 × TN + 1 × FP."""
     false_positive_rate, recall, thresholds = roc_curve(target, probabilities)
     positives = int(target.sum())
     negatives = len(target) - positives
@@ -87,12 +55,13 @@ def cost_threshold(target, probabilities, cost_ratio):
 
 
 def youden_threshold(target, probabilities):
-    """The cut-off maximising recall minus false-positive rate."""
+    """The threshold where recall minus false-positive rate is biggest."""
     false_positive_rate, recall, thresholds = roc_curve(target, probabilities)
     return float(thresholds[int(np.argmax(recall - false_positive_rate))])
 
 
 def threshold_report(target, probabilities, threshold):
+    """Caught, flagged, recall and precision at one threshold."""
     _, false_alarms, _, caught = confusion_matrix(
         target, probabilities >= threshold, labels=[0, 1]).ravel()
     caught, false_alarms = int(caught), int(false_alarms)
@@ -109,7 +78,7 @@ def threshold_report(target, probabilities, threshold):
 
 
 def write_threshold(value):
-    """Replace the RISK_THRESHOLD literal in config.py, leaving its comment intact."""
+    """Replace the RISK_THRESHOLD value in config.py."""
     source = CONFIG_PATH.read_text(encoding="utf-8")
     updated, replaced = re.subn(r"^RISK_THRESHOLD = [\d.]+$", f"RISK_THRESHOLD = {value}",
                                 source, count=1, flags=re.MULTILINE)
@@ -132,8 +101,7 @@ def main(write=False):
     by_youden = youden_threshold(train_target, train_probabilities)
     print(f"\ncost (ratio {SCALE_POS_WEIGHT}): {by_cost:.4f}    youden: {by_youden:.4f}")
 
-    # The two are averaged rather than one being picked, because they rest on different
-    # arguments and land close together. Picking one would quietly discard the other's vote.
+    # Two methods, different reasons: the average is used, so neither decides alone.
     derived = round((by_cost + by_youden) / 2, 2)
     print(f"derived threshold: {derived}")
 

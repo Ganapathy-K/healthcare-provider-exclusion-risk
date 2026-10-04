@@ -1,19 +1,4 @@
-"""Train, evaluate and save the provider-exclusion classifier.
-
-Extracted from the modelling notebook. The notebook's chosen configuration is the one below --
-XGBoost with `scale_pos_weight`, which is how the model is told that excluded providers are
-rare. Without it a classifier scores extremely well by answering "not excluded" to everything,
-since 99.76% of the time that is correct, and quietly misses most of what it exists to find.
-
-⚠️ WHY THIS FILE WAS WRITTEN. `baseline.py` scored the deployed `serving/model.ubj` and found
-it had **no** `scale_pos_weight` and a learning rate of 0.3, not 0.1 -- it is not the
-configuration the modelling notebook selected or the README describes. An earlier, unweighted run was
-copied out of MLflow and shipped. Measured recall at threshold 0.5: **0.177**.
-
-Only the training configuration is corrected here. The target leakage in the encoding maps
-(see features.py) is a separate defect and is deliberately NOT touched in the same change --
-two fixes at once means neither can be attributed.
-"""
+"""Train, evaluate and save the XGBoost model that scores each provider's exclusion risk."""
 
 import json
 import sys
@@ -30,7 +15,7 @@ from features import FEATURE_COLUMNS, fit_encoding_maps, prepare_features
 
 
 def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
-    """The notebook-03 configuration. `scale_pos_weight` is the one that matters here."""
+    """XGBoost with scale_pos_weight 422, so a missed excluded provider costs 422 false alarms."""
     return xgb.XGBClassifier(
         n_estimators=N_ESTIMATORS,
         max_depth=MAX_DEPTH,
@@ -41,6 +26,7 @@ def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
 
 
 def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
+    """Recall and the number of providers flagged, on the test rows."""
     probabilities = model.predict_proba(features_test[FEATURE_COLUMNS])[:, 1]
     predictions = (probabilities >= threshold).astype(int)
     return {
@@ -66,11 +52,7 @@ def train(save=False):
 
     if save:
         model.save_model(MODEL_PATH)
-
-        # The maps MUST ship with the model that was trained on them. The agent looks up
-        # every categorical value in this file, so a model trained on train-only means paired
-        # with full-data means would be scored on numbers it never saw -- silently, since the
-        # column names and order would still line up perfectly.
+        # The encoding maps ship with the model trained on them; the agent reads both.
         ENCODING_MAPS_PATH.write_text(json.dumps(encoding_maps), encoding="utf-8")
 
     return model, scores, (features_test, target_test)

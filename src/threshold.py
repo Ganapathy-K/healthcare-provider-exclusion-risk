@@ -22,7 +22,7 @@ Two criteria are computed, and they are meant to agree or disagree in public:
             agreement between the two is evidence the answer is not an artefact of the ratio.
 
 Run:  python src/threshold.py              # derive, print the sweep, change nothing
-      python src/threshold.py --write      # also write it to config.py and stamp model.ubj
+      python src/threshold.py --write      # also write it to config.py
 """
 
 import re
@@ -137,25 +137,6 @@ def write_threshold(value):
     print(f"config.py: RISK_THRESHOLD = {value}")
 
 
-def stamp_model(value):
-    """Store the threshold on the booster itself, beside the weights it applies to.
-
-    `serving/app.py` ships as a standalone container -- its Dockerfile copies the app, the
-    model and the encoding maps and nothing else -- so it cannot import config.py, and until
-    this existed it compared against a hard-coded 0.5 that no amount of editing config.py
-    would have changed. Writing it here means the scorer reads the cut-off out of the same
-    file it scores with, which is already how that file gets its column order, and for the
-    same reason: a second copy is a thing that can disagree.
-
-    Only an attribute is written. The weights, and therefore every probability, are untouched.
-    """
-    model = xgb.XGBClassifier()
-    model.load_model(MODEL_PATH)
-    model.get_booster().set_attr(risk_threshold=str(value))
-    model.save_model(MODEL_PATH)
-    print(f"{MODEL_PATH.name}: risk_threshold = {value}")
-
-
 def main(write=False):
     raw = pd.read_parquet(LABELLED_DATASET_PATH)
     train_rows, test_rows = train_test_split(
@@ -199,7 +180,6 @@ def main(write=False):
     if write:
         print()
         write_threshold(derived)
-        stamp_model(derived)
     return derived
 
 

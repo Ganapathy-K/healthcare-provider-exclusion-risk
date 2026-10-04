@@ -5,12 +5,6 @@
 # which live above serving_agent/. A Dockerfile can only COPY from its build context, so the
 # context has to be the project root -- which means the file has to be here.
 #
-# The OTHER service, the XGBoost scorer, has its own Dockerfile in serving/ and is deployed
-# from that directory. Two services, two Dockerfiles, deliberately not merged: the scorer's
-# dependencies are pandas and xgboost, while this one needs torch, sentence-transformers,
-# langchain, langgraph and the Gemini SDK. Folding them together would put a working, deployed
-# service at risk of dependencies it has no use for.
-#
 # Three things are baked in rather than fetched at boot:
 #   the MiniLM embedding weights  ~90 MB; a cold start that downloads them looks like a hang.
 #   the prebuilt Qdrant directory the embedded store, read-only at runtime. Rebuilding it from

@@ -2,12 +2,11 @@
 
 ## Live
 
-Two FastAPI services on Cloud Run. Both scale to zero, so the first request takes about a minute to wake up.
+One FastAPI service on Cloud Run. It scales to zero, so the first request takes about a minute to wake up.
 
 - **Agent** — send it a question and it decides whether to score a provider or search the exclusion records: https://healthcare-provider-exclusion-risk-agent-445269150468.us-central1.run.app/docs
-- **Predictor** — give it one NPI, get a risk score: https://healthcare-provider-exclusion-risk-predictor-445269150468.us-central1.run.app/docs
 
-The links land on the interactive API page, because neither service serves anything at `/`.
+The link lands on the interactive API page, because the service serves nothing at `/`.
 
 This is a portfolio project I built to predict which healthcare providers are at risk of being excluded (terminated) by the US OIG, and to let someone ask questions about the exclusion data in plain English.
 
@@ -33,7 +32,7 @@ The runnable code lives in `src/`. Two notebooks show the analysis behind it:
 
 `src/` is one module per stage — `config` · `ingest` · `features` · `model` · `vectorstore` · `retrieve` · `generate` · `rbac` · `agent` · `tracing` — alongside the evaluation suite (`golden_set` · `retrieval_eval` · `answer_eval` · `router_eval`) and the two files this README is really about, `baseline.py` and `smoke_test.py`.
 
-`serving/` is the scorer's deployable (model file, FastAPI app, Dockerfile); `serving_agent/` is the agent's.
+`serving/` holds the model file and its encoding maps; `serving_agent/` is the deployable app.
 
 ## Freezing behaviour before refactoring, and what it found
 
@@ -205,9 +204,8 @@ Two limits, stated rather than left to be found: **a role in the request body is
 
 ## What's actually deployed
 
-Two Cloud Run services, deliberately separate — the scorer's dependencies are pandas and xgboost, the agent needs torch, langgraph and the Gemini SDK, and folding them together would risk a working deployment to save one deploy.
+One Cloud Run service:
 
-- **Scorer** — `serving/`, FastAPI + Docker. `src/smoke_test.py` asserts the deployed artefact is the weighted model.
 - **Agent** — `serving_agent/`, `POST /ask` and `GET /health`. Runs the same agent as `src/agent.py`: picks the model or grounded retrieval, checks the answer and can try the other tool once, enforces roles, refuses when the records don't support an answer, and traces every request. The response's `tools_run` lists every tool that ran.
 
 Qdrant runs **embedded** in the agent's container: a read-only directory baked into the image, selected by `QDRANT_PATH`, with the Docker server still the default locally. Cloud Run gives one container and one port, so a Qdrant server would have meant a second service to run, pay for and secure, for an index of 8,482 records.
@@ -235,8 +233,6 @@ curl -s -X POST https://healthcare-provider-exclusion-risk-agent-445269150468.us
 ```
 
 Health should report `indexed_records: 8482`. The second is the switch path: an NPI that cannot be scored must come back with `tools_run` listing **both** tools, because code — not the LLM check — sends an unscorable NPI to retrieval. One tool in that list means the old build is still serving.
-
-The scorer service deploys from `serving/` with its own Dockerfile. Its exact flags are not recorded here.
 
 ## Observability
 
@@ -289,7 +285,7 @@ The agent service runs either way — `QDRANT_PATH=data/qdrant_store python serv
 
 `src/model.py --save` writes **both** `serving/model.ubj` and `serving/encoding_maps.json`. They have to travel together: a model trained on training-only category means, served with full-data means, would score every provider on numbers it had never seen — with identical column names and order, so nothing would error.
 
-Dependencies in `serving/requirements.txt` are pinned. They weren't until this work, which meant every Cloud Run build pulled whatever was newest that day, on a live service.
+Dependencies in `serving_agent/requirements.txt` are pinned. They weren't until this work, which meant every Cloud Run build pulled whatever was newest that day, on a live service.
 
 **Two themes run through every bug in this repo.**
 

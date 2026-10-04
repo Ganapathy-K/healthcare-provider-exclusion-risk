@@ -91,7 +91,7 @@ def train(save=False, leak_free=False):
     if save:
         model.save_model(MODEL_PATH)
 
-        # The maps MUST ship with the model that was trained on them. serving/app.py looks up
+        # The maps MUST ship with the model that was trained on them. The agent looks up
         # every categorical value in this file, so a model trained on train-only means paired
         # with full-data means would be scored on numbers it never saw -- silently, since the
         # column names and order would still line up perfectly.

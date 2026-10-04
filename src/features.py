@@ -18,15 +18,8 @@ scored on. Test metrics are therefore optimistic by an unknown amount. The fix i
 maps on the training split only, but doing that CHANGES the model, so it must happen after
 the baseline is frozen and be reported as a new number -- not folded in silently.
 
-✅ FIXED DEFECT 2 — THE COLUMN ORDER USED TO LIVE IN TWO PLACES. `FEATURE_COLUMNS` here and a
-second literal list in `serving/app.py` were maintained separately. XGBoost scores whatever it
-is handed in positional order, so a disagreement between them would have made the deployed
-service predict on misaligned columns and raise nothing at all -- a silent failure.
-
-The copy is gone. `serving/app.py` now reads its order from `model.get_booster()
-.feature_names`, i.e. from the same artifact that does the scoring, so serving cannot disagree
-with the model by construction. `check_serving_alignment()` still runs, but now compares THIS
-training-time list against the trained model -- the one pair that can still drift.
+`FEATURE_COLUMNS` is the one column order. `check_serving_alignment()` checks it against the
+trained model, because XGBoost scores by position and raises nothing on a mismatch.
 """
 
 import json
@@ -36,9 +29,7 @@ import pandas as pd
 from config import (ENCODING_MAPS_PATH, HIGH_CARDINALITY_LIMIT, MAX_NULL_FRACTION,
                     MODEL_PATH, TARGET_COLUMN)
 
-# The exact order the model expects, used at TRAINING time. Serving no longer keeps a copy of
-# this list -- it reads the order out of the model artifact -- so the two can no longer drift.
-# `check_serving_alignment()` now verifies this list against the trained model instead.
+# The exact order the model expects. `check_serving_alignment()` verifies it against the model.
 FEATURE_COLUMNS = [
     "Entity Type Code",
     "Provider Business Mailing Address State Name",
@@ -171,11 +162,9 @@ def encode_provider_record(record, encoding_maps=None):
     """Encode ONE raw NPPES row into the 16 model features, for scoring a single provider.
 
     This is the row-at-a-time counterpart to `prepare_features`, which works on the whole
-    frame. The agent and `serving/app.py` each carried their own copy of this logic -- three
-    implementations of one encoding, any of which could drift from the other two without a
-    single error being raised, because XGBoost scores by position and checks nothing.
+    frame.
 
-    Unknown categories fall back to 0.0, matching serving. That is a real modelling decision
+    Unknown categories fall back to 0.0. That is a real modelling decision
     worth naming: 0.0 is the exclusion rate of a category never seen in training, i.e. "no
     evidence of risk", which is the safe direction for a queue that prioritises review.
     """
@@ -225,12 +214,6 @@ def check_serving_alignment():
 
     XGBoost validates nothing about column NAMES -- it scores by position. Misaligned columns
     produce confident, silent nonsense, which is the worst failure mode a deployed scorer has.
-
-    This used to compare against a second literal list in serving/app.py. That list is gone:
-    serving now reads its order from the model artifact. So the only pair that can still
-    disagree is THIS list and the trained model, which is what is checked here -- and a
-    mismatch now means the model was retrained without updating training-time preparation,
-    not that someone forgot to copy an edit.
     """
     import xgboost as xgb
 
@@ -247,10 +230,10 @@ if __name__ == "__main__":
 
     from config import LABELLED_DATASET_PATH
 
-    aligned, serving_columns = check_serving_alignment()
-    print(f"serving/app.py column order matches: {aligned}")
+    aligned, model_columns = check_serving_alignment()
+    print(f"model column order matches: {aligned}")
     if not aligned:
-        print(f"  serving has {len(serving_columns)}: {serving_columns}")
+        print(f"  model has {len(model_columns)}: {model_columns}")
         print(f"  features has {len(FEATURE_COLUMNS)}: {FEATURE_COLUMNS}")
 
     raw = pd.read_parquet(LABELLED_DATASET_PATH)

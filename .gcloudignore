@@ -20,7 +20,3 @@ logs/
 # shipping both would triple the image for nothing.
 data/processed/labelled_dataset.parquet
 
-# The scorer's own service builds from serving/ with its own Dockerfile.
-serving/Dockerfile
-serving/requirements.txt
-serving/server.log

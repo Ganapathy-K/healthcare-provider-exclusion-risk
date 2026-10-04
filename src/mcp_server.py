@@ -2,7 +2,7 @@
 
 WHAT THIS IS. The LangGraph agent already owns two tools -- an XGBoost risk scorer and a
 grounded RAG lookup over the exclusion records. This file publishes those SAME two functions
-through MCP, so an external client (Claude Desktop, an IDE, another agent) can call them
+through MCP, so an external client (a desktop assistant, an IDE, another agent) can call them
 without importing this codebase. It is a wrapper, not a second implementation: each MCP tool
 below is one line that calls the function agent.py already calls, so the model, the RBAC and
 the grounding cannot drift between the agent and the protocol. That is the deliberate opposite
@@ -65,6 +65,6 @@ def query_exclusion_records_tool(question: str, role: str = "public") -> str:
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
-    # stdio is the transport local MCP clients (Claude Desktop, IDEs) speak. A streamable-HTTP
+    # stdio is the transport local MCP clients (desktop assistants, IDEs) speak. A streamable-HTTP
     # transport is a one-line change (transport="streamable-http") when a remote client needs it.
     server.run(transport="stdio")

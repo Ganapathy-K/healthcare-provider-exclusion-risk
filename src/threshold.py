@@ -31,7 +31,7 @@ import sys
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import roc_curve
+from sklearn.metrics import confusion_matrix, roc_curve
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
 from config import (LABELLED_DATASET_PATH, MODEL_PATH, PROJECT_ROOT, RANDOM_STATE,
@@ -81,29 +81,14 @@ def out_of_fold_probabilities(raw, train_rows):
     return target.to_numpy(), probabilities.to_numpy()
 
 
-def candidate_thresholds(probabilities):
-    """Every distinct predicted probability is a candidate -- the counts only change where a
-    row crosses over, so a finer grid gains nothing. Capped so the sweep stays quick."""
-    distinct = np.unique(np.round(probabilities, 5))
-    if len(distinct) > 20000:
-        distinct = np.quantile(distinct, np.linspace(0, 1, 20000))
-    return distinct
-
-
-def confusion(target, probabilities, threshold):
-    """(caught, false alarms, missed) at one cut-off."""
-    flagged = probabilities >= threshold
-    caught = int((flagged & (target == 1)).sum())
-    return caught, int(flagged.sum()) - caught, int(target.sum()) - caught
-
-
 def cost_threshold(target, probabilities, cost_ratio):
     """The cut-off minimising `cost_ratio * misses + false alarms`."""
-    grid = candidate_thresholds(probabilities)
-    costs = [cost_ratio * missed + false_alarms
-             for _, false_alarms, missed in
-             (confusion(target, probabilities, threshold) for threshold in grid)]
-    return float(grid[int(np.argmin(costs))])
+    false_positive_rate, recall, thresholds = roc_curve(target, probabilities)
+    positives = int(target.sum())
+    negatives = len(target) - positives
+    costs = cost_ratio * positives * (1 - recall) + negatives * false_positive_rate
+    # thresholds[0] is roc_curve's "flag nobody" point (infinity); a cut-off must flag someone.
+    return float(thresholds[1:][int(np.argmin(costs[1:]))])
 
 
 def youden_threshold(target, probabilities):
@@ -113,7 +98,9 @@ def youden_threshold(target, probabilities):
 
 
 def threshold_report(target, probabilities, threshold):
-    caught, false_alarms, missed = confusion(target, probabilities, threshold)
+    _, false_alarms, _, caught = confusion_matrix(
+        target, probabilities >= threshold, labels=[0, 1]).ravel()
+    caught, false_alarms = int(caught), int(false_alarms)
     flagged = caught + false_alarms
     positives = int(target.sum())
     return {

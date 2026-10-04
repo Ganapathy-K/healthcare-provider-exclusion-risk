@@ -41,14 +41,6 @@ def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
     )
 
 
-def split(features, target):
-    """The modelling notebook's split: stratified, 20% test, seed 42. Stratify is not optional --
-    an unstratified 20% of a 1:422 problem can differ in positive count by enough to move
-    every metric on its own."""
-    return train_test_split(features, target, test_size=TEST_SIZE,
-                            random_state=RANDOM_STATE, stratify=target)
-
-
 def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
     probabilities = model.predict_proba(features_test[FEATURE_COLUMNS])[:, 1]
     predictions = (probabilities >= threshold).astype(int)
@@ -62,27 +54,16 @@ def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
     }
 
 
-def train(save=False, leak_free=False):
-    """Train on the notebook's split. `leak_free=True` fits the target encodings on the
-    training rows only, instead of on every row (see features.py, defect 1).
-
-    The split is taken on the RAW frame first in the leak-free path, because the maps must be
-    fitted before the features that use them exist. The row membership is identical either
-    way -- same seed, same stratification -- so the two runs remain comparable.
-    """
+def train(save=False):
+    """Stratified 80/20 split on the raw rows, encoding maps fitted on the training rows only."""
     raw = pd.read_parquet(LABELLED_DATASET_PATH)
-
-    if leak_free:
-        train_rows, test_rows = train_test_split(
-            raw.index, test_size=TEST_SIZE, random_state=RANDOM_STATE,
-            stratify=raw[TARGET_COLUMN])
-        encoding_maps = fit_encoding_maps(raw.loc[train_rows])
-        features, target, _ = prepare_features(raw, encoding_maps=encoding_maps)
-        features_train, target_train = features.loc[train_rows], target.loc[train_rows]
-        features_test, target_test = features.loc[test_rows], target.loc[test_rows]
-    else:
-        features, target, encoding_maps = prepare_features(raw)
-        features_train, features_test, target_train, target_test = split(features, target)
+    train_rows, test_rows = train_test_split(
+        raw.index, test_size=TEST_SIZE, random_state=RANDOM_STATE,
+        stratify=raw[TARGET_COLUMN])
+    encoding_maps = fit_encoding_maps(raw.loc[train_rows])
+    features, target, _ = prepare_features(raw, encoding_maps=encoding_maps)
+    features_train, target_train = features.loc[train_rows], target.loc[train_rows]
+    features_test, target_test = features.loc[test_rows], target.loc[test_rows]
 
     model = build_model()
     model.fit(features_train[FEATURE_COLUMNS], target_train)
@@ -103,13 +84,12 @@ def train(save=False, leak_free=False):
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     saving = "--save" in sys.argv
-    leaky = "--leaky" in sys.argv          # reproduce the old behaviour for comparison only
 
-    model, scores, (features_test, target_test) = train(save=saving, leak_free=not leaky)
+    model, scores, (features_test, target_test) = train(save=saving)
 
     positives = int(target_test.sum())
     print(f"test set: {len(target_test):,} rows, {positives} excluded providers")
-    print(f"encodings fitted on: {'every row (leaky)' if leaky else 'training rows only'}\n")
+    print()
     for key in ("recall", "precision", "f1", "roc_auc", "average_precision"):
         print(f"  {key:<20}{scores[key]:.4f}")
     print(f"  {'providers flagged':<20}{scores['flagged']:,}")

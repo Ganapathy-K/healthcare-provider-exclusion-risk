@@ -1,4 +1,4 @@
-"""Measure the router on 17 questions, half on the boundary: intent accuracy and NPI accuracy."""
+"""Intent and NPI accuracy on 17 router questions, half on the boundary, to measure the router."""
 
 import sys
 
@@ -42,7 +42,7 @@ CASES = [
 
 
 def run():
-    """One classify_intent call per case: (question, wanted, got, intent_ok, npi_ok) rows."""
+    """One result row per case, to count intent and NPI accuracy."""
     results = []
     for question, expected_intent, expected_npi in CASES:
         try:

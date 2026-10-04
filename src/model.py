@@ -1,4 +1,4 @@
-"""Train, evaluate and save the XGBoost model that scores each provider's exclusion risk."""
+"""The XGBoost risk model, trained, checked and saved, to score every provider."""
 
 import json
 import sys
@@ -15,7 +15,7 @@ from features import FEATURE_COLUMNS, fit_encoding_maps, prepare_features
 
 
 def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
-    """XGBoost with scale_pos_weight 422, so a missed excluded provider costs 422 false alarms."""
+    """An untrained XGBoost with scale_pos_weight 422, to weigh one miss as 422 false alarms."""
     return xgb.XGBClassifier(
         n_estimators=N_ESTIMATORS,
         max_depth=MAX_DEPTH,
@@ -26,7 +26,7 @@ def build_model(scale_pos_weight=SCALE_POS_WEIGHT):
 
 
 def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
-    """Recall and the number of providers flagged, on the test rows."""
+    """Recall and flagged on unseen test rows, to prove the model works."""
     probabilities = model.predict_proba(features_test[FEATURE_COLUMNS])[:, 1]
     predictions = (probabilities >= threshold).astype(int)
     return {
@@ -36,7 +36,7 @@ def evaluate(model, features_test, target_test, threshold=RISK_THRESHOLD):
 
 
 def train(save=False):
-    """Stratified 80/20 split on the raw rows, encoding maps fitted on the training rows only."""
+    """The trained model and its test scores, maps fitted on train rows only, to avoid a leak."""
     raw = pd.read_parquet(LABELLED_DATASET_PATH)
     train_rows, test_rows = train_test_split(
         raw.index, test_size=TEST_SIZE, random_state=RANDOM_STATE,

@@ -1,4 +1,4 @@
-"""Build the labelled dataset: NPPES providers, excluded = 1 when their NPI is in the LEIE."""
+"""The labelled dataset (excluded = 1 when the NPI is in the LEIE), to train the model on."""
 
 import sys
 
@@ -10,12 +10,12 @@ from config import (LABELLED_DATASET_PATH, LEIE_PATH, LOOKUP_COLUMNS, NPPES_FILE
 
 
 def load_leie():
-    """Read the whole LEIE file (latin-1, because it has bytes that are not valid utf-8)."""
+    """The whole LEIE file, to get the excluded NPIs."""
     return pd.read_csv(LEIE_PATH, encoding="latin-1", low_memory=False)
 
 
 def load_nppes(rows=NPPES_SAMPLE_ROWS):
-    """Read the first 500,000 NPPES rows straight from the zip."""
+    """The first 500,000 NPPES rows from the zip, to get the providers to label."""
     import zipfile
 
     with zipfile.ZipFile(NPPES_ZIP_PATH) as archive:
@@ -24,12 +24,12 @@ def load_nppes(rows=NPPES_SAMPLE_ROWS):
 
 
 def excluded_npis(leie):
-    """The set of excluded NPIs, without NPI 0 (the LEIE's placeholder for a missing NPI)."""
+    """Excluded NPIs minus the placeholder 0, to match providers by NPI."""
     return set(leie.loc[leie["NPI"] != 0, "NPI"])
 
 
 def build_labelled_dataset(save=False):
-    """Set excluded = 1 where the NPI is in the LEIE set. Returns (dataframe, report)."""
+    """NPPES with excluded = 1 where the NPI is in the LEIE set, to give the model its target."""
     leie = load_leie()
     nppes = load_nppes()
 

@@ -1,4 +1,4 @@
-"""Hybrid retrieval: dense (Qdrant) and keyword (BM25) legs merged by an EnsembleRetriever, k=10."""
+"""Hybrid retrieval, dense (Qdrant) + BM25, to find records by meaning and by exact word."""
 
 import re
 import sys
@@ -15,24 +15,24 @@ _bm25_index = None
 
 
 def get_dense_retriever(top_k=RETRIEVER_K):
-    """Matches by MEANING. Cached per k."""
+    """The Qdrant retriever, cached per k, to match by meaning."""
     if top_k not in _dense_cache:
         _dense_cache[top_k] = get_vector_store().as_retriever(search_kwargs={"k": top_k})
     return _dense_cache[top_k]
 
 
 def tokenize(text):
-    """Lowercase, split on non-letters and non-digits: "PROCTOLOGY" matches "proctology"."""
+    """Lowercase letter-and-digit words, to make "PROCTOLOGY" match "proctology"."""
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
 def keyword_tokens(document):
-    """The words BM25 matches a record on: its sentence, plus its NPI."""
+    """A record's sentence words plus its NPI, to let BM25 find a record by NPI."""
     return tokenize(document.page_content) + [str(document.metadata["NPI"])]
 
 
 def get_keyword_retriever(top_k=RETRIEVER_K):
-    """Matches by WORD (BM25). Built once, with the same record text as the dense leg."""
+    """The BM25 retriever, built once, to match by exact word."""
     global _bm25_index
     if _bm25_index is None:
         documents = build_documents()
@@ -44,7 +44,7 @@ def get_keyword_retriever(top_k=RETRIEVER_K):
 
 
 def get_retriever(top_k=RETRIEVER_K, hybrid=USE_HYBRID, weights=HYBRID_WEIGHTS):
-    """Dense alone, or dense merged with BM25."""
+    """Dense alone or dense + BM25 merged, to switch hybrid on or off."""
     if not hybrid:
         return get_dense_retriever(top_k=top_k)
     return EnsembleRetriever(
@@ -54,7 +54,7 @@ def get_retriever(top_k=RETRIEVER_K, hybrid=USE_HYBRID, weights=HYBRID_WEIGHTS):
 
 
 def retrieve(question, top_k=RETRIEVER_K, hybrid=USE_HYBRID):
-    """The top_k exclusion records for one question."""
+    """The top_k exclusion records for a question, to ground the answer."""
     return get_retriever(top_k=top_k, hybrid=hybrid).invoke(question)
 
 
@@ -63,7 +63,7 @@ SOURCE_FIELDS = [("NAME", ""), ("NPI", "NPI: "), ("SPECIALTY", ""), ("STATE", ""
 
 
 def format_sources(documents):
-    """One line per record, showing only the fields present (an analyst's records have no NAME)."""
+    """One line per record with only the fields it has, to show sources any role may see."""
     lines = []
     for index, document in enumerate(documents, start=1):
         parts = [f"{label}{document.metadata[key]}"

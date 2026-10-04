@@ -1,4 +1,4 @@
-"""Agent: router -> tool (risk model or RAG) -> LLM check -> maybe the other tool, 2 runs max."""
+"""Router → tool → LLM check → maybe the other tool (2 runs max), to answer with the right tool."""
 
 import json
 import re
@@ -71,7 +71,7 @@ _lookup = None
 
 
 def get_model():
-    """The XGBoost model from serving/model.ubj, loaded once."""
+    """The XGBoost model from serving/model.ubj, loaded once, to avoid reloading per question."""
     global _model
     if _model is None:
         _model = xgb.XGBClassifier()
@@ -80,7 +80,7 @@ def get_model():
 
 
 def get_lookup():
-    """The provider table for scoring: the slim 12-column copy, else the full dataset."""
+    """The provider table (slim 12-column copy, else full), to find an NPI's record."""
     global _lookup
     if _lookup is None:
         source = (PROVIDER_LOOKUP_PATH if PROVIDER_LOOKUP_PATH.exists()
@@ -90,12 +90,12 @@ def get_lookup():
 
 
 def score_provider_risk(npi):
-    """Score one provider by NPI; every failure returns a sentence, never an exception."""
+    """The score sentence only, to give tool callers plain text, never an exception."""
     return score_npi(npi)[0]
 
 
 def score_npi(npi):
-    """Returns (sentence, scored); scored is False for no NPI, a bad NPI, or one not in the data."""
+    """(sentence, scored) for one NPI, to send an unscorable NPI to RAG."""
     if npi in (None, "", "null"):
         return ("No NPI was supplied, so I can't score a specific provider. "
                 "Please include a 10-digit NPI."), False
@@ -116,12 +116,12 @@ def score_npi(npi):
 
 
 def query_leie_rag(question, role):
-    """RAG over the exclusion records; sources are listed only when it answered."""
+    """The RAG answer text, sources only when it answered, for tool callers like MCP."""
     return run_rag(question, role)[0]
 
 
 def run_rag(question, role):
-    """RAG with its evidence kept: returns (answer text, documents cited, refused)."""
+    """(answer, documents, refused), to let the agent judge and switch."""
     answer, documents = answer_question(question, role=role)
     refused = REFUSAL_TEXT.lower() in answer.lower()
     if refused or not documents:
@@ -149,13 +149,13 @@ NPI_PATTERN = re.compile(r"(?<!\d)\d{10}(?!\d)")
 
 
 def extract_npi(question):
-    """Pull the NPI out with a regex, not the LLM: same answer every time, for free."""
+    """The 10-digit NPI by regex, to get the same answer every time, for free."""
     match = NPI_PATTERN.search(question)
     return match.group(0) if match else ""
 
 
 def classify_intent(question):
-    """LLM router: "risk" or "rag"; any output it cannot parse falls back to "rag"."""
+    """"risk" or "rag" from the LLM (unparseable → "rag"), to pick the tool."""
     # The question is wrapped so an instruction hidden inside it is read as text, not obeyed.
     response = get_client().models.generate_content(
         model=GENERATION_MODEL_NAME,
@@ -174,7 +174,7 @@ def classify_intent(question):
 
 
 def judge_answer(question, tool, answer):
-    """LLM check: "done" or "switch"; any failure returns "done" and keeps the first answer."""
+    """"done" or "switch" from the LLM (failure → "done"), to try the other tool only if needed."""
     try:
         response = get_client().models.generate_content(
             model=GENERATION_MODEL_NAME,
@@ -189,7 +189,7 @@ def judge_answer(question, tool, answer):
 
 
 def router_node(state: AgentState) -> AgentState:
-    """Choose the tool, and record the choice in the trace."""
+    """The chosen tool, recorded in the trace, to start the run."""
     with trace_span("route", as_type="span", question=state["question"]) as span:
         decision = classify_intent(state["question"])
         state["tool_used"] = ("score_provider_risk" if decision["intent"] == "risk"
@@ -200,7 +200,7 @@ def router_node(state: AgentState) -> AgentState:
 
 
 def tool_node(state: AgentState) -> AgentState:
-    """Run the chosen tool and record what came back."""
+    """The tool's answer and flags, to decide whether to stop, check or switch."""
     # No role means "public", which retrieves nothing.
     role = get_role(state.get("role") or DEFAULT_ROLE)
     tool = state["tool_used"]
@@ -227,7 +227,7 @@ def tool_node(state: AgentState) -> AgentState:
 
 
 def check_node(state: AgentState) -> AgentState:
-    """Ask the LLM whether the tool's answer answers the question."""
+    """The LLM check's verdict, to decide done or switch."""
     with trace_span("check", as_type="span", tool=state["tool_used"]) as span:
         state["next_step"] = judge_answer(state["question"], state["tool_used"], state["answer"])
         update_span(span, output={"next": state["next_step"]})
@@ -235,7 +235,7 @@ def check_node(state: AgentState) -> AgentState:
 
 
 def switch_node(state: AgentState) -> AgentState:
-    """Keep the first answer, then point the agent at the other tool."""
+    """The first answer saved and the other tool chosen, to try once more."""
     state["previous"] = {key: state[key] for key in ("tool_used", "answer", "documents",
                                                      "refused", "blocked")}
     state["tool_used"] = TOOLS[1] if state["tool_used"] == TOOLS[0] else TOOLS[0]
@@ -243,7 +243,7 @@ def switch_node(state: AgentState) -> AgentState:
 
 
 def after_tool(state: AgentState) -> str:
-    """Stop when nothing is left; a failed score goes straight to RAG, decided by code."""
+    """The next step (end, check or switch), to send a failed score straight to RAG."""
     if state["blocked"] or len(state["tools_run"]) >= MAX_TOOL_RUNS:
         return END
     if state["tool_failed"]:
@@ -252,7 +252,7 @@ def after_tool(state: AgentState) -> str:
 
 
 def after_check(state: AgentState) -> str:
-    """Switch only when the check says so AND the other tool can actually run."""
+    """Switch only if the check says so and the other tool can run, to avoid a pointless run."""
     if state["next_step"] != "switch":
         return END
     other = TOOLS[1] if state["tool_used"] == TOOLS[0] else TOOLS[0]
@@ -278,7 +278,7 @@ def build_agent():
 
 
 def ask(question, role, agent=None):
-    """Run one question through the agent, as one trace."""
+    """One question through the agent as one trace, to answer and record it."""
     agent = agent or build_agent()
     with trace_span("agent", as_type="span", question=question, role=role) as span:
         result = agent.invoke({"question": question, "tool_used": "", "npi": "",

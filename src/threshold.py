@@ -1,4 +1,4 @@
-"""Pick the threshold on out-of-fold train scores, check it once on test rows (--write saves it)."""
+"""The threshold picked on out-of-fold train scores and checked on test rows, to replace 0.5."""
 
 import re
 import sys
@@ -22,7 +22,7 @@ INHERITED_THRESHOLD = 0.5
 
 
 def out_of_fold_probabilities(raw, train_rows):
-    """5 folds: each fits on 320k train rows and scores the other 80k; every row gets one score."""
+    """One out-of-fold score per train row (5 folds), to pick the threshold on unseen scores."""
     target = raw.loc[train_rows, TARGET_COLUMN]
     probabilities = pd.Series(index=train_rows, dtype=float)
 
@@ -45,7 +45,7 @@ def out_of_fold_probabilities(raw, train_rows):
 
 
 def cost_threshold(target, probabilities, cost_ratio):
-    """The score where the total cost is smallest: 0 × TP + 422 × FN + 0 × TN + 1 × FP."""
+    """The score with the lowest 0 × TP + 422 × FN + 0 × TN + 1 × FP, to minimise total cost."""
     false_positive_rate, recall, thresholds = roc_curve(target, probabilities)
     positives = int(target.sum())
     negatives = len(target) - positives
@@ -55,13 +55,13 @@ def cost_threshold(target, probabilities, cost_ratio):
 
 
 def youden_threshold(target, probabilities):
-    """The threshold where recall minus false-positive rate is biggest."""
+    """The score where recall − false-positive rate is biggest, to cross-check the cost pick."""
     false_positive_rate, recall, thresholds = roc_curve(target, probabilities)
     return float(thresholds[int(np.argmax(recall - false_positive_rate))])
 
 
 def threshold_report(target, probabilities, threshold):
-    """Caught, flagged, recall and precision at one threshold."""
+    """Caught, flagged, recall and precision at one threshold, to compare thresholds."""
     _, false_alarms, _, caught = confusion_matrix(
         target, probabilities >= threshold, labels=[0, 1]).ravel()
     caught, false_alarms = int(caught), int(false_alarms)
@@ -78,7 +78,7 @@ def threshold_report(target, probabilities, threshold):
 
 
 def write_threshold(value):
-    """Replace the RISK_THRESHOLD value in config.py."""
+    """RISK_THRESHOLD rewritten in config.py, to ship the derived threshold."""
     source = CONFIG_PATH.read_text(encoding="utf-8")
     updated, replaced = re.subn(r"^RISK_THRESHOLD = [\d.]+$", f"RISK_THRESHOLD = {value}",
                                 source, count=1, flags=re.MULTILINE)

@@ -155,7 +155,7 @@ Three golden-set questions came back refused with the answer sitting in the file
 
 Rewording the question into the file's spelling found every one of them (0/2 → 2/2, 0/1 → 1/1), which is what makes this a vocabulary problem rather than a ranking one. Neither retrieval leg closes it alone: the embedding does not reliably place `CARDIOLOGY` near "cardiologists", and BM25 compares whole tokens with no stemmer, so those are two different words to it. Stemming would not have rescued it either — *-ology* and *-ologist* are two words, not two endings of one word.
 
-`src/vocabulary.py` fixes it at index time instead. Each record's sentence now carries the same specialty and state in the words a person would use — `COMM MNTL HLTH CNTR` **and** "community mental health center", `CO` **and** "Colorado" — while keeping the file's own wording searchable. Retrieval went to hit 1.000, MRR 0.827, record recall 1.000, and end-to-end from 26/29 to **29/29**.
+`also_written_as` in `src/vectorstore.py` fixes it at index time instead. Each record's sentence now carries the same specialty and state in the words a person would use — `COMM MNTL HLTH CNTR` **and** "community mental health center", `CO` **and** "Colorado" — while keeping the file's own wording searchable. Retrieval went to hit 1.000, MRR 0.827, record recall 1.000, and end-to-end from 26/29 to **29/29**.
 
 **The honest caveat, because the number is perfect and perfect numbers deserve suspicion:** those expansion rules were written *after* seeing which three questions failed. They are general — every `-OLOGY` specialty, every truncated word in the corpus, every state code, not just the three that broke — but the golden set is no longer independent evidence for them. The next questions added to it will be, and until then 1.000 means "no known failure", not "no failure".
 
@@ -165,9 +165,9 @@ Rewording the question into the file's spelling found every one of them (0/2 →
 
 ### End-to-end: 29/29, zero hallucinations
 
-`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-14 with the agent and the NPI keyword search, saved in `docs/answer_eval_results.txt`: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
+`src/answer_eval.py` grades the whole pipeline without a judge, crossing answered/refused with should-have. Run 2026-09-14 with the agent and the NPI keyword search: **20 answered correctly with NPIs cited, 9 refused correctly including all five traps, zero wrong refusals.**
 
-The run before the fix scored 26/29, with the three wrong refusals that motivated `src/vocabulary.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
+The run before the fix scored 26/29, with the three wrong refusals that motivated `also_written_as` in `src/vectorstore.py`. Every one of them said the same thing in its detail line: *retrieval missed it too*.
 
 **A single pass is a sample, not a score.** An earlier run the same morning scored 23/29: two questions returned Gemini 503/500 errors, and one — assisted living facilities in Florida — was refused *with the correct record already retrieved*, which is the expensive failure this section exists to catch. Identical prompts do not give identical runs, so the number to trust is the one that repeats.
 

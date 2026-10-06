@@ -141,7 +141,7 @@ RETRIEVER_K = 10
 
 # Dense (meaning) + BM25 (exact words), measured and kept: at k=10 it takes hit rate
 # 0.800 -> 1.000, MRR 0.556 -> 0.827 and record recall 0.697 -> 1.000, and it is the only
-# thing that reaches a record by its literal words -- which is what src/vocabulary.py put
+# thing that reaches a record by its literal words -- which is what vectorstore.also_written_as put
 # into the index in the first place.
 # ⚠️ BM25 is worthless here without src/retrieve.tokenize -- see the warning in that function.
 USE_HYBRID = True

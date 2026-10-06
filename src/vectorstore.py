@@ -28,7 +28,6 @@ from qdrant_client.http.models import Distance, VectorParams
 from config import (EMBEDDING_DIM, EMBEDDING_MODEL_NAME, QDRANT_COLLECTION_NAME,
                     QDRANT_PATH, QDRANT_URL)
 from ingest import load_leie
-from vocabulary import also_written_as
 
 DISTANCE_METRIC = Distance.COSINE
 
@@ -36,6 +35,161 @@ DISTANCE_METRIC = Distance.COSINE
 # birth, reinstatement fields) is either identifying or empty for most rows.
 RAG_COLUMNS = ["NPI", "LASTNAME", "FIRSTNAME", "BUSNAME", "SPECIALTY", "STATE",
                "EXCLTYPE", "EXCLDATE", "GENERAL"]
+
+# --- Vocabulary: say each record in the words a person would use, as well as the LEIE's. ---
+# Measured 2026-09-07: three golden-set questions were refused with the answer in the file,
+# because question and record used different words for the same thing:
+#     "cardiologists" vs CARDIOLOGY · "proctologist" vs PROCTOLOGY ·
+#     "community mental health centers" vs COMM MNTL HLTH CNTR
+# Rewording the question found every one (0/2 -> 2/2, 0/1 -> 1/1), so it is a vocabulary
+# problem, not a ranking one. Neither leg closes it alone (no stemmer in BM25; -ology and
+# -ologist are two words), so both forms are written into the sentence at INDEX time.
+
+# LEIE specialty fields are truncated to fit a fixed width. Only unambiguous ones are listed;
+# tokens whose intent is not obvious from the corpus (T, K, BELO, GRADE) are left alone,
+# because a wrong expansion indexes a lie.
+ABBREVIATIONS = {
+    "ACF": "adult care facility",
+    "CNTR": "center",
+    "CO": "company",
+    "COMM": "community",
+    "CONGLOM": "conglomerate",
+    "CTR": "center",
+    "DME": "durable medical equipment",
+    "EQ": "equipment",
+    "FAC": "facility",
+    "FACI": "facility",
+    "FACIL": "facility",
+    "FP": "family practice",
+    "GEN": "general",
+    "GOV": "government",
+    "GYN": "gynecology",
+    "HC": "healthcare",
+    "HE": "health",
+    "HLTH": "health",
+    "IDTF": "independent diagnostic testing facility",
+    "MANUF": "manufacturer",
+    "MGMT": "management",
+    "MNTL": "mental",
+    "OBS": "obstetrics",
+    "ORGANIZAT": "organization",
+    "PHYS": "physician",
+    "PHYSIATRIS": "physiatrist",
+    "PRACT": "practice",
+    "PRACTITIONE": "practitioner",
+    "PROSTHETIS": "prosthetist",
+    "PROVID": "provider",
+    "PROVIDE": "provider",
+    "RECIPT": "recipient",
+    "REHA": "rehabilitation",
+    "REHAB": "rehabilitation",
+    "SUPLIER": "supplier",
+    "SUPP": "supplier",
+    "SUPPL": "supplier",
+    "SVCS": "services",
+    "TRANS": "transportation",
+    "UNK": "unknown",
+}
+
+# A question names the PERSON ("was a proctologist excluded?"); the file names the FIELD
+# (PROCTOLOGY). These are the ones no suffix rule gets right.
+IRREGULAR_PERSON_FORMS = {
+    "ACUPUNCTURE": "acupuncturist",
+    "CHIROPRACTIC": "chiropractor",
+    "COUNSELING": "counselor",
+    "DENTAL": "dentist",
+    "GENETICS": "geneticist",
+    "MEDICINE": "physician",
+    "NURSING": "nurse",
+    "ORTHOPEDICS": "orthopedist",
+    "PEDIATRICS": "pediatrician",
+    "PHARMACY": "pharmacist",
+    "SURGERY": "surgeon",
+    "THERAPY": "therapist",
+}
+
+# Everything else that follows a rule. Ordered longest-first so OMETRY beats OTOMY-style
+# overlaps and nothing matches on a shorter tail by accident.
+PERSON_FORM_SUFFIXES = (
+    ("OMETRY", "ometrist"),
+    ("OTOMY", "otomist"),
+    ("IATRY", "iatrist"),
+    ("OLOGY", "ologist"),
+    ("PATHY", "path"),
+)
+
+STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois",
+    "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
+    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+    "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota",
+    "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee",
+    "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    "AS": "American Samoa", "GU": "Guam", "MP": "Northern Mariana Islands",
+    "PR": "Puerto Rico", "VI": "Virgin Islands",
+}
+
+
+def _text(value):
+    """The field as a string. LEIE leaves SPECIALTY and STATE empty on some rows, and pandas
+    hands those back as a float NaN rather than as a missing string."""
+    return value if isinstance(value, str) else ""
+
+
+def person_form(specialty):
+    """The word for the PERSON, given the file's word for the field. None when there isn't one.
+
+    Only whole specialties are converted, not tokens inside them: "MENTAL/BEHAVIORAL HE" has
+    no person form, and inventing one puts a word in the index that no record supports.
+    """
+    key = _text(specialty).strip().upper()
+    if key in IRREGULAR_PERSON_FORMS:
+        return IRREGULAR_PERSON_FORMS[key]
+    for suffix, replacement in PERSON_FORM_SUFFIXES:
+        if key.endswith(suffix) and len(key) > len(suffix):
+            return key[: -len(suffix)].lower() + replacement
+    return None
+
+
+def spell_out(specialty):
+    """The specialty with its truncated words written out. None when nothing was truncated."""
+    tokens = _text(specialty).replace("/", " ").split()
+    if not tokens:
+        return None
+    expanded = [ABBREVIATIONS.get(token.upper(), token.lower()) for token in tokens]
+    spelled = " ".join(expanded)
+    return spelled if spelled != " ".join(token.lower() for token in tokens) else None
+
+
+def also_written_as(specialty, state):
+    """Every other way a person might write this record's specialty and state.
+
+    Returned as a list so the caller decides the phrasing, and empty when the file's own
+    wording is already the wording a person would use -- most records need nothing.
+    """
+    forms = []
+
+    spelled = spell_out(specialty)
+    if spelled:
+        forms.append(spelled)
+
+    person = person_form(specialty)
+    if person:
+        forms.append(person)
+        forms.append(person + "s")
+
+    state_name = STATE_NAMES.get(_text(state).strip().upper())
+    if state_name:
+        forms.append(state_name)
+
+    return forms
+
 
 _embeddings = None
 
@@ -76,7 +230,7 @@ def to_sentence(row):
     """One record as a sentence an embedding model can compare against a question.
 
     A second sentence carries the same specialty and state in the words a person would use --
-    see `src/vocabulary.py` for the three golden-set questions that made this necessary. It is
+    see the Vocabulary block above for the three golden-set questions that made this necessary. It is
     appended rather than substituted because the file's own wording has to stay searchable
     too: someone who types COMM MNTL HLTH CNTR must still find the record.
 

@@ -94,11 +94,6 @@ def get_role(name):
     return ROLES.get((name or "").strip().lower(), ROLES[DEFAULT_ROLE])
 
 
-def is_organisation(metadata):
-    """Organisation records carry a business name in the GENERAL category field."""
-    return str(metadata.get("GENERAL", "")).strip() in ORGANISATION_CATEGORIES
-
-
 def qdrant_filter(role):
     """The role's restriction expressed as a Qdrant filter, applied during the search.
 
@@ -155,7 +150,8 @@ def apply(documents, role):
     if not role.can_retrieve:
         return []
     if role.entity_filter == "organisation":
-        documents = [doc for doc in documents if is_organisation(doc.metadata)]
+        documents = [doc for doc in documents
+                     if str(doc.metadata.get("GENERAL", "")).strip() in ORGANISATION_CATEGORIES]
     return [redact_document(document, role) for document in documents]
 
 

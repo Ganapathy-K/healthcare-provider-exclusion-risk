@@ -23,17 +23,12 @@ def load_nppes(rows=NPPES_SAMPLE_ROWS):
             return pd.read_csv(member, nrows=rows, low_memory=False)
 
 
-def excluded_npis(leie):
-    """Excluded NPIs minus the placeholder 0, to match providers by NPI."""
-    return set(leie.loc[leie["NPI"] != 0, "NPI"])
-
-
 def build_labelled_dataset(save=False):
     """NPPES with excluded = 1 where the NPI is in the LEIE set, to give the model its target."""
     leie = load_leie()
     nppes = load_nppes()
 
-    excluded = excluded_npis(leie)
+    excluded = set(leie.loc[leie["NPI"] != 0, "NPI"])  # NPI 0 is the LEIE placeholder
     nppes[TARGET_COLUMN] = nppes["NPI"].isin(excluded).astype(int)
 
     report = {

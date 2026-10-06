@@ -173,17 +173,15 @@ def encode_provider_record(record, encoding_maps=None):
     def target_encode(column, value):
         return maps[column].get(str(value), 0.0)
 
-    def as_float(value, default=0.0):
-        return float(value) if pd.notna(value) else default
-
     row = {
         "Entity Type Code": int(record["Entity Type Code"])
         if pd.notna(record["Entity Type Code"]) else 0,
         "Provider Business Mailing Address State Name": target_encode(
             "Provider Business Mailing Address State Name",
             record["Provider Business Mailing Address State Name"]),
-        "Provider Business Mailing Address Telephone Number": as_float(
-            record["Provider Business Mailing Address Telephone Number"]),
+        "Provider Business Mailing Address Telephone Number": float(
+            record["Provider Business Mailing Address Telephone Number"])
+        if pd.notna(record["Provider Business Mailing Address Telephone Number"]) else 0.0,
         "Provider Business Practice Location Address State Name": target_encode(
             "Provider Business Practice Location Address State Name",
             record["Provider Business Practice Location Address State Name"]),

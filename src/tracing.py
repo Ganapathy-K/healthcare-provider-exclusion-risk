@@ -177,11 +177,6 @@ def answer_and_shown_npis(trace):
     return str(root_output or ""), set()
 
 
-def is_refusal(answer):
-    lowered = answer.lower()
-    return any(marker in lowered for marker in REFUSAL_MARKERS)
-
-
 def summarise(traces):
     latencies = [t.latency for t in traces if t.latency is not None]
     costs = [t.total_cost for t in traces if t.total_cost]
@@ -191,7 +186,7 @@ def summarise(traces):
     substantive, cited, fabricated = 0, 0, 0
     for trace in rag_traces:
         answer, shown = answer_and_shown_npis(trace)
-        if not answer or is_refusal(answer):
+        if not answer or any(marker in answer.lower() for marker in REFUSAL_MARKERS):
             continue
         substantive += 1
         mentioned = set(NPI_PATTERN.findall(answer))

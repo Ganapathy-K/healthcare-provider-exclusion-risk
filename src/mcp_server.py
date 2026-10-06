@@ -44,7 +44,7 @@ def score_provider_risk_tool(npi: str) -> str:
     plain sentence rather than an error, because a tool result has to be something the caller
     can act on.
     """
-    return score_provider_risk(npi)
+    return score_provider_risk(npi)[0]
 
 
 @server.tool()
@@ -60,7 +60,7 @@ def query_exclusion_records_tool(question: str, role: str = "public") -> str:
     session, not from this argument -- see the module docstring. An unknown role falls back to
     public, so a typo narrows access rather than widening it.
     """
-    return query_leie_rag(question, role=role)
+    return query_leie_rag(question, role=role)[0]
 
 
 if __name__ == "__main__":

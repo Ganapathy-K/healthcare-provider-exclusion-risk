@@ -90,11 +90,6 @@ def get_lookup():
 
 
 def score_provider_risk(npi):
-    """The score sentence only, to give tool callers plain text, never an exception."""
-    return score_npi(npi)[0]
-
-
-def score_npi(npi):
     """(sentence, scored) for one NPI, to send an unscorable NPI to RAG."""
     if npi in (None, "", "null"):
         return ("No NPI was supplied, so I can't score a specific provider. "
@@ -116,11 +111,6 @@ def score_npi(npi):
 
 
 def query_leie_rag(question, role):
-    """The RAG answer text, sources only when it answered, for tool callers like MCP."""
-    return run_rag(question, role)[0]
-
-
-def run_rag(question, role):
     """(answer, documents, refused), to let the agent judge and switch."""
     answer, documents = answer_question(question, role=role)
     refused = REFUSAL_TEXT.lower() in answer.lower()
@@ -215,10 +205,10 @@ def tool_node(state: AgentState) -> AgentState:
                                "scores. Scoring identifies a specific provider.")
             state["refused"], state["blocked"] = True, True
         else:
-            state["answer"], scored = score_npi(state["npi"])
+            state["answer"], scored = score_provider_risk(state["npi"])
             state["tool_failed"] = not scored
     else:
-        state["answer"], state["documents"], state["refused"] = run_rag(state["question"], role)
+        state["answer"], state["documents"], state["refused"] = query_leie_rag(state["question"], role)
 
     # A second run that also fails is no better than the first, so the first answer stands.
     if state["previous"] and (state["refused"] or state["tool_failed"]):

@@ -1,21 +1,9 @@
-"""Run every extracted module once and assert the things that were silently wrong tonight.
+"""Runs 11 checks across the whole project once, to catch a broken piece before a commit.
 
-Not a unit-test suite -- there are no mocks and nothing is isolated. It is the check a person
-would run before trusting the refactor: does each module import, does it do its one job, and
-do the pieces that must agree still agree?
+1. Real calls, no mocks: it checks the pieces still agree with each other, not each piece alone.
+2. Each check guards one thing that once broke: model weight, feature order, encoding maps, NPI in context, RBAC.
 
-Every assertion here exists because the corresponding thing was ACTUALLY BROKEN on
-2026-07-27, not because it seemed worth checking:
-
-  wrong model deployed      serving/model.ubj had no scale_pos_weight; recall was 0.177
-  wrong model in the agent  the agent loaded a different artefact from MLflow entirely
-  encoding maps mismatched  the maps shipped were fitted on data the model was not
-  feature order duplicated  three copies of the column list, XGBoost validates none of it
-  refusal on answerable Qs  the NPI was missing from the context the model was shown
-
-Requires: the Qdrant container running (docker start qdrant-healthcare) and an API key.
-Costs a handful of Gemini calls.
-
+Needs Qdrant running (docker start qdrant-healthcare) and an API key; costs a few Gemini calls.
 Run:  python src/smoke_test.py
 """
 
@@ -75,10 +63,7 @@ def _model_config():
     model = xgb.XGBClassifier()
     model.load_model(MODEL_PATH)
     config = json.loads(model.get_booster().save_config())
-    # Not under tree_train_param, where it looks like it should be: scale_pos_weight is an
-    # objective parameter, because it reweights the loss rather than the tree search. And it
-    # is NOT recoverable from get_params() on a loaded model -- that returns None for both the
-    # weighted and unweighted files, which is precisely why this check reads the saved config.
+    # Read from the saved config: get_params() on a loaded model gives None for scale_pos_weight.
     weight = config["learner"]["objective"]["reg_loss_param"]["scale_pos_weight"]
     assert float(weight) > 1, (
         f"scale_pos_weight is {weight} -- this is the unweighted model that catches "
@@ -154,8 +139,7 @@ def _rbac():
 
     question = "Which acupuncturists in New York were excluded?"
 
-    # An unknown role must not widen access. A typo that returns everything is the worst
-    # possible default, and it is the default you get by accident.
+    # An unknown role must not widen access.
     assert get_role("typo-role").name == "public", "unknown role did not fall back to public"
     assert get_role("").name == "public", "empty role did not fall back to public"
 
@@ -166,8 +150,7 @@ def _rbac():
         "analyst saw an NPI -- one NPPES lookup turns that back into a name, so this is not "
         "de-identified")
 
-    # The corpus must survive redaction. The first implementation mutated documents in place,
-    # so one analyst query stripped the names out of the BM25 index for every later caller.
+    # Redaction must copy, not edit: the BM25 index holds the same Document objects.
     after = retrieve(question, top_k=3)
     assert any("NAME" in doc.metadata for doc in after), (
         "redaction destroyed the shared corpus -- documents must be COPIED, not mutated")

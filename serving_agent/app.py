@@ -1,21 +1,8 @@
-"""The agent as a service: one endpoint that routes to the risk model or to retrieval.
+"""Serves the agent on Cloud Run as one /ask endpoint, so any program can call it over HTTP.
 
-The scoring model has been deployed since June; the agent has only ever run in a notebook or
-on a laptop. That gap is the whole point of this file -- a routing agent that cannot be called
-by anything is a demonstration, not a system, and "production-ready, not POCs" is a phrase
-that appears in the job descriptions this project exists to answer.
-
-Deliberately a SEPARATE Cloud Run service from `serving/` rather than more endpoints on it.
-The scorer's image is small and its dependencies are pandas and xgboost; the agent needs
-torch, sentence-transformers, langchain, langgraph and the Gemini SDK. Folding them together
-would put a working, deployed service at risk of a dependency it does not need, to save one
-deployment.
-
-Qdrant runs EMBEDDED here -- a directory baked into the image, no server, no network. Cloud
-Run gives one container and one port, so a Qdrant server would mean a second service to run,
-pay for and secure, for a read-only index of 8,482 records. Its exclusive file lock is fine
-because each instance is its own single-process container, but it does mean this service
-cannot reindex itself: rebuilding is an ingest-time job.
+1. Its own Cloud Run service, apart from serving/: the agent's heavy packages cannot break the scorer.
+2. Qdrant embedded in the Docker image: no second service to run, pay for and secure.
+3. Models load at startup, not on the first question: Cloud Run reads a slow start as a failure.
 
 Run locally:  QDRANT_PATH=../data/qdrant_store uvicorn app:app --reload
 """
@@ -39,9 +26,7 @@ from pydantic import BaseModel, Field
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 
-# In the image, src/ sits beside app.py at /app/src. In the repo, app.py is in serving_agent/
-# and src/ is its sibling one level up. Both are checked so the same file runs in both places
-# -- a service that can only be exercised after a container build is a service nobody tests.
+# src/ sits beside app.py in the Docker image and one level up in the repo; both are checked.
 for candidate in (Path(__file__).resolve().parent / "src",
                   Path(__file__).resolve().parent.parent / "src"):
     if candidate.is_dir():
@@ -72,16 +57,11 @@ class AskRequest(BaseModel):
         examples=["analyst"],
     )
 
-    # ⚠️ A ROLE IN THE REQUEST BODY IS NOT AUTHENTICATION, and this API has none. Any caller
-    # can claim to be an investigator, so what is demonstrated here is the ENFORCEMENT
-    # mechanism -- filtering before the model sees anything -- not the identity check in front
-    # of it. In a real deployment the role comes from a verified token, never from the caller.
-    # Saying so is better than letting a reviewer assume this is access control end to end.
+    # No login here: any caller can claim a role. A real deployment takes role from a verified token.
 
 
 class Source(BaseModel):
-    """One cited record. Every field is optional because a role-filtered record genuinely has
-    fewer of them -- an analyst's records carry no name and no NPI."""
+    """One cited record; every field is optional because a role-filtered record has fewer."""
 
     npi: int | None = None
     name: str | None = None
@@ -92,17 +72,7 @@ class Source(BaseModel):
 
 
 class AskResponse(BaseModel):
-    """The typed answer.
-
-    `tool` is what makes this API usable by another program: the two branches answer
-    fundamentally different questions -- one is a model PREDICTION about a provider, the other
-    is a statement of RECORD about the past -- and a caller must be able to tell them apart
-    without parsing prose. Conflating a prediction with a record is the mistake this whole
-    project exists to avoid making about real, named people.
-
-    `status` distinguishes a grounded answer from a refusal. A refusal returns HTTP 200: it is
-    the system working correctly, not a malformed request.
-    """
+    """The typed answer: tool tells a model prediction from a record; a refusal is still HTTP 200."""
 
     tool: Literal["query_leie_rag", "score_provider_risk"] = Field(
         description="The tool whose answer this is.")
@@ -132,12 +102,7 @@ _agent = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the embedding model and open the index before the first request.
-
-    Cold-starting inside the first request looks like a hang to whoever opened the link, and
-    Cloud Run treats a container that is slow to accept traffic as a failing one. The warm-up
-    belongs in startup, where the platform is still waiting for the port.
-    """
+    """Loads the embedding model and Qdrant before the first request, so the first caller does not wait."""
     global ready, indexed, _agent
     try:
         def warm():
@@ -171,11 +136,7 @@ app = FastAPI(
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 async def health():
-    """Reports whether the RETRIEVER is loaded, not merely that the server is up.
-
-    This process can answer HTTP perfectly while every question fails because the embedding
-    model never loaded or the index directory is missing from the image.
-    """
+    """Reports whether the retriever loaded, not only that the server is up."""
     return HealthResponse(
         status="ok" if ready else "degraded",
         retriever_ready=ready,
@@ -185,15 +146,7 @@ async def health():
 
 @app.post("/ask", response_model=AskResponse, tags=["agent"])
 async def ask(request: AskRequest):
-    """Run the agent, and say which tools ran and whose answer this is.
-
-    The agent itself -- router, tools, check, the role rule for scoring -- lives in
-    `src/agent.py`, so this endpoint, the CLI and the evals all run the same graph.
-
-    `asyncio.to_thread` is load-bearing: the router call, the embedding pass and the answer
-    call all block for seconds, and awaiting them on the event loop would serialise every
-    other caller behind the first.
-    """
+    """Runs the agent in a thread, so one slow question does not block the other callers."""
     if not ready:
         raise HTTPException(status_code=503, detail="Retriever is not loaded yet.")
 
@@ -207,12 +160,10 @@ async def ask(request: AskRequest):
 
     npi = result["npi"]
     documents = result["documents"]
-    # The graph's answer carries a "Sources:" block for text readers; here the sources go out
-    # as typed fields instead, so the block is taken back off.
+    # Sources go out as typed fields, so the text "Sources:" part is taken off the answer.
     answer = result["answer"].removesuffix(f"\n\nSources:\n{format_sources(documents)}")
 
-    # Built from what each record actually carries, so a redacted field is absent rather than
-    # rendered as the string "None" -- which would leak the SHAPE of what was withheld.
+    # A hidden field is left out, never sent as "None".
     sources = [
         Source(**{key: value for key, value in (
             ("npi", doc.metadata.get("NPI")),

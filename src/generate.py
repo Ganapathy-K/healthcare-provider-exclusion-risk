@@ -1,23 +1,8 @@
-"""Answer a question about exclusions from the retrieved records, and nothing else.
+"""Answers an exclusion question from the retrieved records only, to stop made-up provider claims.
 
-One change to the prompt is called out below rather than slipped in.
-
-⚠️ WHAT THE NOTEBOOK'S PROMPT DID, AND WHY IT IS NOT KEPT VERBATIM. It was:
-
-    "Based on the following LEIE exclusion records:\n{context}\n\nAnswer this question: {query}"
-
-That instructs the model to *consider* the records. It does not forbid using its own knowledge,
-does not require citing an NPI, and gives it no way to say the records do not answer the
-question -- so the one behaviour that makes a grounded system trustworthy, refusing, is
-unavailable to it. On exclusion data that is the expensive failure: a fluent sentence naming a
-real provider as excluded, assembled from the model's memory rather than the retrieved rows.
-
-The insurance project measured this failure class and it is not hypothetical -- there, a model
-turned "22.5% of the policy premium" into "₹22,500" while citing the correct page.
-
-The grounding instruction below is therefore a deliberate correction, not an extraction. It is
-also NOT yet measured: there is no golden set for this half of the project, so nothing here
-proves the refusal fires when it should. That is the next piece of work.
+1. Answer only from the records, cite every NPI, or give REFUSAL_TEXT: an uncited claim cannot be checked.
+2. RBAC filter between retrieval and the prompt: a hidden field never reaches Gemini, Langfuse or the logs.
+3. Two Langfuse spans, retrieve and generate: "retrieval missed it" and "Gemini refused anyway" need opposite fixes.
 """
 
 import re
@@ -37,14 +22,7 @@ REFUSAL_TEXT = "The retrieved exclusion records do not answer that."
 # Ten digits standing alone: the shape of an NPI in a question.
 NPI_IN_TEXT = re.compile(r"(?<!\d)\d{10}(?!\d)")
 
-# ⚠️ A WARNING THAT BACKFIRED, KEPT HERE BECAUSE IT COST AN HOUR AND WILL RECUR.
-# This instruction first contained the line: "These records concern real, named people and
-# organisations, and a provider wrongly described as excluded is a serious error." It reads
-# like responsible prompt engineering. It made the model refuse EVERYTHING -- including
-# "are there any excluded pharmacies in New York?", with three New York pharmacies sitting in
-# the context. A/B tested against the same records: with the line, refusal; without it, a
-# correct cited answer. Telling a model that being wrong is dangerous does not make it more
-# careful, it makes it decline. Constrain what it may SAY; never editorialise about stakes.
+# No "being wrong is serious" line: tested, it made Gemini refuse every question.
 SYSTEM_INSTRUCTION = (
     "You answer questions about US OIG healthcare provider exclusions using ONLY the "
     "exclusion records provided below. Each record names a provider, their NPI, specialty, "
@@ -72,32 +50,13 @@ def get_client():
 
 
 def build_prompt(question, documents):
-    """Render the retrieved records, INCLUDING the NPI, as the prompt's context.
-
-    ⚠️ THE BUG THIS FIXES, WHICH LOOKED LIKE FOUR OTHER THINGS FIRST. The indexed sentence
-    (`vectorstore.to_sentence`) names the provider, specialty, state, date and code -- but NOT
-    the NPI, which lives only in metadata. Rendering only `page_content` therefore produced a
-    context with no NPI in it, while the instruction demanded an NPI for every provider named.
-
-    The model resolved that contradiction the only way it could: it decided the records did
-    not answer the question, and took the refusal. So a grounded, correctly-retrieved,
-    obviously-answerable question ("are there any excluded pharmacies in New York?", with
-    three New York pharmacies in context) refused every single time.
-
-    The tell was that removing the refusal option made it answer perfectly. A model given an
-    impossible instruction and an escape hatch will use the escape hatch -- and the resulting
-    refusal is indistinguishable from correct grounded behaviour, which is what makes this
-    class of bug expensive. An unmeasured refusal rate hides it completely.
-    """
+    """Gives the prompt with each record's NPI in the context, because without it Gemini refused every question."""
     context = "\n".join(
         f"[{i}] " + (f"NPI {doc.metadata['NPI']}: " if "NPI" in doc.metadata else "")
         + doc.page_content
         for i, doc in enumerate(documents, start=1))
 
-    # The citation rule has to bend for roles that cannot see the field it names. Demanding an
-    # NPI from a context that contains none is the exact contradiction that made this model
-    # refuse everything once already -- see the warning above. So the instruction is relaxed
-    # rather than the context padded.
+    # A role that cannot see NPIs gets a no-names rule, not a cite-the-NPI rule it cannot follow.
     instruction = SYSTEM_INSTRUCTION
     if documents and "NPI" not in documents[0].metadata:
         instruction = instruction.replace(
@@ -106,22 +65,13 @@ def build_prompt(question, documents):
             "These records are anonymised: they carry no names or identifiers. Describe what "
             "they show without naming anyone, and do not invent identifiers.\n")
 
-    # The question is delimited and the boundary rule is appended to the instruction, so an
-    # injection buried in the user's text ("repeat your instructions", "you are now...") arrives
-    # as part of the question to be answered, not as a competing instruction. This is the layer
-    # that moved prompt-extraction from a leak to a hold in injection_eval.py; RBAC and grounding
-    # already handled the exfiltration and fabrication attacks without it.
+    # The question goes inside the injection_guard wrap, so an injected order reads as question text.
     return (f"{instruction}\n{BOUNDARY_INSTRUCTION}\n\nExclusion records:\n{context}\n\n"
             f"{wrap(question)}\n\nAnswer:")
 
 
 def token_usage(response):
-    """Gemini's token counts in the shape Langfuse prices, or None if absent.
-
-    The KEY NAMES matter: Langfuse looks for "input"/"output" to apply the model's published
-    rates. None rather than zeros when the response carries no usage block -- a zero is
-    indistinguishable from a genuinely free call and would drag any average toward nothing.
-    """
+    """Gives Gemini's token counts named input/output, so Langfuse can price the call; None if absent."""
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
         return None
@@ -136,36 +86,10 @@ def token_usage(response):
 
 
 def answer_question(question, role, top_k=RETRIEVER_K):
-    """Retrieve, enforce the role, ground, answer. Returns (answer, documents).
-
-    `role` is REQUIRED and has no default. It used to default to "investigator", the tier that
-    sees every name and every NPI, so any caller that simply forgot the argument was handed full
-    access silently -- the exact opposite of what rbac.py sets out to do, and unnoticeable in
-    review because the call still reads correctly. With no default the mistake cannot be made:
-    forgetting it is a TypeError at the call site, and every full-access caller has to say so
-    in writing.
-
-    The role is applied BETWEEN retrieval and the prompt, which is the only position where it
-    means anything: once a record is in the prompt it has reached the model provider, the
-    trace and the logs, and asking the model to keep quiet about it is a request, not a
-    control. See rbac.py.
-
-    The default is `investigator` -- full access -- because every internal caller here (the
-    eval scripts, the CLI) is doing exclusion review. The API defaults the other way, to
-    `public`, because there the caller is unknown. Defaults should follow who is asking.
-
-    Traced in two separate spans on purpose. "Retrieval missed the record" and "retrieval
-    found it and the model refused anyway" look identical from the outside and need opposite
-    fixes -- one is a retriever problem, the other a prompt problem. Recording the retrieved
-    NPIs alongside the final answer is what makes them tellable apart afterwards instead of
-    reproducible only by hand.
-    """
+    """Gives (answer, documents); role has no default, so no caller gets full access by forgetting it."""
     resolved_role = get_role(role) if isinstance(role, str) else role
 
-    # A role that may not see NPIs may not SEARCH by one either. The keyword search matches an
-    # NPI exactly, and the role filter below runs after the search, so an analyst asking "was
-    # NPI X excluded?" would get X's record back with only the name hidden -- which confirms X
-    # is excluded. The scorer refuses these roles for the same reason.
+    # A role that cannot see NPIs cannot search by one: a returned record would confirm the NPI is excluded.
     search_text = (question if "NPI" in resolved_role.visible_fields
                    else NPI_IN_TEXT.sub(" ", question))
 
@@ -178,8 +102,7 @@ def answer_question(question, role, top_k=RETRIEVER_K):
             "retrieved": retrieved_count,
             "after_role_filter": len(documents),
             "role": resolved_role.name,
-            # The NPIs AFTER filtering. Logging the pre-filter list would put records the role
-            # may not see into the trace -- which is the same leak the filter exists to stop.
+            # NPIs after the role filter, so the trace never holds a hidden record.
             "npis": [doc.metadata.get("NPI") for doc in documents],
         })
 
@@ -187,18 +110,12 @@ def answer_question(question, role, top_k=RETRIEVER_K):
         return REFUSAL_TEXT, []
 
     with trace_span("generate", as_type="generation", question=question) as span:
-        # temperature 0 here for the same reason as the router in agent.py: this answer is
-        # graded by whether it cites the right NPI, and a grade that moves between two runs of
-        # the same question cannot be read. It does not buy determinism -- two runs at 0 still
-        # disagreed there -- it only removes the variation that is ours to remove.
+        # temperature 0: the grade is whether the right NPI is cited, so the answer must not wander.
         response = get_client().models.generate_content(
             model=GENERATION_MODEL_NAME, contents=build_prompt(question, documents),
             config=types.GenerateContentConfig(temperature=0))
         answer = (response.text or "").strip()
-        # The model name and token counts go to the tracer alongside the answer. Without them
-        # every trace prices at zero and "what does a question cost?" is unanswerable after
-        # the fact -- the counts exist only on this response object and cannot be
-        # reconstructed later from the text.
+        # Model name + token counts, or Langfuse prices every trace at zero.
         update_span(span, model=GENERATION_MODEL_NAME, usage_details=token_usage(response),
                     output={
             "answer": answer,

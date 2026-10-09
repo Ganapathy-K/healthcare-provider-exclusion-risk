@@ -1,19 +1,9 @@
-"""Turn LEIE exclusion records into searchable documents and index them in Qdrant.
+"""Turns each LEIE record into one sentence and stores it in Qdrant, so RAG can search by meaning.
 
-Each excluded provider becomes one short sentence -- name,
-specialty, state, date, reason -- because that is what an embedding model can compare. A
-table row cannot be searched by meaning; a sentence can.
-
-Only the 8,482 LEIE records carrying a valid NPI are indexed, matching the labelled dataset:
-the two halves of this project must agree on who counts as excluded, or the agent will answer
-questions about providers the model has never scored. Those 8,482 rows cover 8,306 unique NPIs
--- 176 providers hold two exclusion records each. Retrieval indexes the rows, because each row
-is a separate exclusion event; the labelling join uses the unique NPIs, because a provider is
-excluded or not. Both counts are correct and they are not interchangeable.
-
-⚠️ Unlike the insurance project, this Qdrant is a SERVER (Docker, localhost:6333), not an
-embedded file. Nothing here works with the container stopped, and the failure is a connection
-error rather than an empty result -- which is the better of the two.
+1. A sentence, not a table row: the embedding model compares sentences.
+2. Only the 8,482 records with an NPI: the same providers the XGBoost model scored.
+3. "Also written as" words added at index time: a question says cardiologist, the LEIE says CARDIOLOGY.
+4. No NPI in the sentence: it blurred the meaning search (MRR 0.8267 -> 0.7800); BM25 carries the NPI.
 """
 
 import sys
@@ -31,23 +21,12 @@ from ingest import load_leie
 
 DISTANCE_METRIC = Distance.COSINE
 
-# The columns that describe an exclusion. Everything else in the LEIE (addresses, dates of
-# birth, reinstatement fields) is either identifying or empty for most rows.
+# The LEIE columns that describe an exclusion; the rest identify a person or are mostly empty.
 RAG_COLUMNS = ["NPI", "LASTNAME", "FIRSTNAME", "BUSNAME", "SPECIALTY", "STATE",
                "EXCLTYPE", "EXCLDATE", "GENERAL"]
 
-# --- Vocabulary: say each record in the words a person would use, as well as the LEIE's. ---
-# Measured 2026-09-07: three golden-set questions were refused with the answer in the file,
-# because question and record used different words for the same thing:
-#     "cardiologists" vs CARDIOLOGY · "proctologist" vs PROCTOLOGY ·
-#     "community mental health centers" vs COMM MNTL HLTH CNTR
-# Rewording the question found every one (0/2 -> 2/2, 0/1 -> 1/1), so it is a vocabulary
-# problem, not a ranking one. Neither leg closes it alone (no stemmer in BM25; -ology and
-# -ologist are two words), so both forms are written into the sentence at INDEX time.
-
-# LEIE specialty fields are truncated to fit a fixed width. Only unambiguous ones are listed;
-# tokens whose intent is not obvious from the corpus (T, K, BELO, GRADE) are left alone,
-# because a wrong expansion indexes a lie.
+# --- Vocabulary: each record also in the words a person would type ---
+# Only clear LEIE short forms; an unsure one is left out, because a wrong one puts a lie in the index.
 ABBREVIATIONS = {
     "ACF": "adult care facility",
     "CNTR": "center",
@@ -91,8 +70,7 @@ ABBREVIATIONS = {
     "UNK": "unknown",
 }
 
-# A question names the PERSON ("was a proctologist excluded?"); the file names the FIELD
-# (PROCTOLOGY). These are the ones no suffix rule gets right.
+# Person words no suffix rule gets right (PHARMACY -> pharmacist).
 IRREGULAR_PERSON_FORMS = {
     "ACUPUNCTURE": "acupuncturist",
     "CHIROPRACTIC": "chiropractor",
@@ -108,8 +86,7 @@ IRREGULAR_PERSON_FORMS = {
     "THERAPY": "therapist",
 }
 
-# Everything else that follows a rule. Ordered longest-first so OMETRY beats OTOMY-style
-# overlaps and nothing matches on a shorter tail by accident.
+# Person words by suffix (CARDIOLOGY -> cardiologist).
 PERSON_FORM_SUFFIXES = (
     ("OMETRY", "ometrist"),
     ("OTOMY", "otomist"),
@@ -137,17 +114,12 @@ STATE_NAMES = {
 
 
 def _text(value):
-    """The field as a string. LEIE leaves SPECIALTY and STATE empty on some rows, and pandas
-    hands those back as a float NaN rather than as a missing string."""
+    """Gives the field as text; an empty LEIE field comes back from pandas as NaN."""
     return value if isinstance(value, str) else ""
 
 
 def person_form(specialty):
-    """The word for the PERSON, given the file's word for the field. None when there isn't one.
-
-    Only whole specialties are converted, not tokens inside them: "MENTAL/BEHAVIORAL HE" has
-    no person form, and inventing one puts a word in the index that no record supports.
-    """
+    """Gives the person word for a whole specialty (PROCTOLOGY -> proctologist), or None."""
     key = _text(specialty).strip().upper()
     if key in IRREGULAR_PERSON_FORMS:
         return IRREGULAR_PERSON_FORMS[key]
@@ -168,11 +140,7 @@ def spell_out(specialty):
 
 
 def also_written_as(specialty, state):
-    """Every other way a person might write this record's specialty and state.
-
-    Returned as a list so the caller decides the phrasing, and empty when the file's own
-    wording is already the wording a person would use -- most records need nothing.
-    """
+    """Gives the other ways a person writes this specialty and state; empty for most records."""
     forms = []
 
     spelled = spell_out(specialty)
@@ -206,12 +174,7 @@ _client = None
 
 
 def get_client():
-    """The Qdrant handle: embedded when QDRANT_PATH is set, otherwise the server.
-
-    One client per process, because the embedded store takes an exclusive file lock and a
-    second client on the same directory raises AlreadyLocked. Anything that builds two
-    retrievers -- the hybrid retriever does -- would hit that immediately.
-    """
+    """Gives one Qdrant client per process: embedded when QDRANT_PATH is set, else the server."""
     global _client
     if _client is None:
         _client = (QdrantClient(path=QDRANT_PATH) if QDRANT_PATH
@@ -227,17 +190,7 @@ def provider_name(row):
 
 
 def to_sentence(row):
-    """One record as a sentence an embedding model can compare against a question.
-
-    A second sentence carries the same specialty and state in the words a person would use --
-    see the Vocabulary block above for the three golden-set questions that made this necessary. It is
-    appended rather than substituted because the file's own wording has to stay searchable
-    too: someone who types COMM MNTL HLTH CNTR must still find the record.
-
-    The NPI is deliberately NOT in the sentence. A ten-digit number means nothing to the
-    meaning search, and adding it blurred it (golden set MRR 0.8267 -> 0.7800). The keyword
-    search carries the NPI instead -- see `retrieve.keyword_tokens`.
-    """
+    """Gives one record as a sentence, plus an "Also written as" part in everyday words."""
     sentence = (f"{provider_name(row)} is a {row['SPECIALTY']} in {row['STATE']} "
                 f"who was excluded on {row['EXCLDATE']} "
                 f"for {row['EXCLTYPE']} ({row['GENERAL']}).")
@@ -249,12 +202,7 @@ def to_sentence(row):
 
 
 def build_documents(leie=None):
-    """The indexable documents, with the structured fields kept as metadata.
-
-    The metadata matters as much as the text: an answer that cannot name the NPI it came from
-    is not checkable, and this is exclusion data -- being wrong about a named provider is the
-    expensive kind of wrong.
-    """
+    """Gives one Document per record, with the fields kept as metadata so each answer can cite its NPI."""
     if leie is None:
         leie = load_leie()
     records = leie.loc[leie["NPI"] != 0, RAG_COLUMNS].to_dict(orient="records")
@@ -286,12 +234,7 @@ def get_vector_store(client=None):
 
 
 def build_collection(documents=None):
-    """(Re)create the collection and index every document. Destructive by design.
-
-    The collection is dropped first rather than appended to. Appending is how an index
-    silently ends up holding two copies of everything, which shows up later as duplicate
-    citations that look like a retrieval bug.
-    """
+    """Drops and rebuilds the Qdrant collection, so it can never hold two copies of a record."""
     documents = documents if documents is not None else build_documents()
     client = get_client()
 

@@ -1,25 +1,10 @@
-"""Grade the whole pipeline, not just retrieval: did it answer, refuse, and cite correctly?
+"""Grades each RAG answer as answered, refused or cited, to catch what eval_gate.py cannot see.
 
-`eval_gate.py` asks whether the right record came back. This asks what happened next --
-whether the model used it, whether it invented anything, and whether it declined when it
-should have. Those are different failures and only the second kind is visible here.
+1. Five outcomes, not one score: a wrong refusal looks the same as a right refusal unless counted apart.
+2. No LLM judge: every outcome is NPI matching on the answer text, so it is free and repeatable.
+3. Trap questions: they pull records that look right but cannot answer them, so a made-up answer shows.
 
-Four outcomes per question, all decided WITHOUT an LLM judge:
-
-  answered_correct   should answer; did; and cited at least one expected NPI
-  answered_uncited   should answer; did; but named no expected NPI -- an answer nobody can check
-  wrong_refusal      should answer; refused. The expensive one, because a refusal looks
-                     identical whether it is right or wrong. This is the exact failure that
-                     went undetected until the NPI-in-context bug was found by hand.
-  correct_refusal    should refuse; did
-
-  hallucination      should refuse; answered anyway. Worst outcome in the set.
-
-THE TRAPS ARE THE POINT. Three golden questions retrieve records that look relevant and do not
-support the question asked -- "how much money did the excluded pharmacies defraud Medicare
-of?" surfaces the pharmacies, and the LEIE contains no monetary figures whatsoever. A model
-that answers those is doing what this project's sibling did when it turned "22.5% of the
-policy premium" into "Rs 22,500". Grounding is only proven where it is tempted.
+Outcomes: answered_correct · answered_uncited · wrong_refusal · correct_refusal · hallucination.
 
 Costs one Gemini call per question. Run:  python src/answer_eval.py
 """

@@ -1,25 +1,10 @@
-"""Turn the labelled NPPES+LEIE dataset into the 16 features the model was trained on.
+"""Turns the labelled NPPES + LEIE dataset into the 16 features the XGBoost model was trained on.
 
-This is a FAITHFUL reproduction of the modelling notebook's preparation, not an improved one. It exists
-so the refactor can be checked against the notebook's own numbers -- a characterization test
-is only meaningful if it reproduces current behaviour exactly, including the parts that are
-wrong. Two of those are called out below and deliberately left alone.
+1. Same steps as the modelling notebook: the shipped model and baseline.json stay matched.
+2. Target encodings fitted on train rows only: a test row's own label never reaches its feature.
+3. FEATURE_COLUMNS is the one column order, checked against the model by check_serving_alignment.
 
-The order of operations matters and is the notebook's:
-  drop columns >30% null -> drop identifiers and free text -> derive year columns ->
-  drop high-cardinality (>1000 distinct) and near-zero-variance columns ->
-  target-encode four categoricals -> one-hot three low-cardinality ones ->
-  fill remaining nulls with the column median.
-
-⚠️ KNOWN DEFECT 1 — TARGET LEAKAGE IN THE ENCODING MAPS. The four target encodings are fit
-on the WHOLE dataset, before the train/test split. Each category's value is the mean of
-`excluded` over every row, so a test row's own label contributes to the feature it is later
-scored on. Test metrics are therefore optimistic by an unknown amount. The fix is to fit the
-maps on the training split only, but doing that CHANGES the model, so it must happen after
-the baseline is frozen and be reported as a new number -- not folded in silently.
-
-`FEATURE_COLUMNS` is the one column order. `check_serving_alignment()` checks it against the
-trained model, because XGBoost scores by position and raises nothing on a mismatch.
+Steps: drop >30% empty -> drop IDs -> years -> drop >1000 values -> encode 4 -> one-hot 3 -> median fill.
 """
 
 import json
@@ -49,8 +34,7 @@ FEATURE_COLUMNS = [
     "Is Sole Proprietor_Y",
 ]
 
-# Identifiers and free text: an NPI is unique per provider and a street address is nearly so,
-# and a model given either can memorise individuals instead of learning risk.
+# Dropped: an NPI or an address lets the model memorise one provider instead of learning risk.
 IDENTIFIER_COLUMNS = [
     "NPI",
     "Provider Last Name (Legal Name)",
@@ -87,14 +71,7 @@ DATE_COLUMNS = {
 
 
 def prepare_features(providers_raw, encoding_maps=None):
-    """Reproduce the modelling notebook's preparation. Returns (X, y, encoding_maps).
-
-    Pass `encoding_maps` to APPLY maps fitted elsewhere instead of fitting new ones on this
-    data. That is how the leakage in defect 1 is avoided: fit on the training split, then
-    apply those maps to the test split, so a test row's own label never reaches the feature
-    it is scored on. Omit it and the original leaky behaviour is reproduced exactly, which is
-    what `baseline.py` needs in order to keep describing the shipped pipeline.
-    """
+    """Gives (features, target, encoding_maps); pass train-row encoding_maps so test labels never leak in."""
     providers = providers_raw.copy()
 
     null_fraction = providers.isnull().mean()
@@ -113,8 +90,7 @@ def prepare_features(providers_raw, encoding_maps=None):
                    inplace=True)
     providers.drop(columns=NEAR_ZERO_VARIANCE_COLUMNS, inplace=True, errors="ignore")
 
-    # Target encoding: each category becomes its mean exclusion rate. Fitted here only when
-    # no maps are supplied -- see defect 1, and `fit_encoding_maps` for the leak-free path.
+    # Target encoding: each category becomes its mean exclusion rate.
     if encoding_maps is None:
         encoding_maps = {}
         for column in TARGET_ENCODED_COLUMNS:
@@ -136,17 +112,7 @@ def prepare_features(providers_raw, encoding_maps=None):
 
 
 def fit_encoding_maps(providers_train_raw):
-    """Fit the four target encodings on TRAINING ROWS ONLY -- the fix for defect 1.
-
-    Fitted on the whole dataset, a category's value is the mean of `excluded` across every
-    row, so each test row contributes its own answer to the number it is later scored on.
-    Rare categories are the worst case: a taxonomy code appearing twice, once excluded, gets
-    the value 0.5 largely BECAUSE of the row being predicted.
-
-    Categories that appear only in the test split are left unmapped and become NaN, which the
-    median fill downstream handles. That is the honest outcome -- at serving time a genuinely
-    new taxonomy code has no history either.
-    """
+    """Gives the 4 target encodings from train rows only, so a test row's own label never reaches its feature."""
     return {
         column: providers_train_raw.groupby(column)[TARGET_COLUMN].mean().to_dict()
         for column in TARGET_ENCODED_COLUMNS
@@ -159,15 +125,7 @@ def load_encoding_maps():
 
 
 def encode_provider_record(record, encoding_maps=None):
-    """Encode ONE raw NPPES row into the 16 model features, for scoring a single provider.
-
-    This is the row-at-a-time counterpart to `prepare_features`, which works on the whole
-    frame.
-
-    Unknown categories fall back to 0.0. That is a real modelling decision
-    worth naming: 0.0 is the exclusion rate of a category never seen in training, i.e. "no
-    evidence of risk", which is the safe direction for a queue that prioritises review.
-    """
+    """Gives the 16 model features for one provider row; an unseen category gets 0.0, meaning no risk history."""
     maps = encoding_maps if encoding_maps is not None else load_encoding_maps()
 
     def target_encode(column, value):
@@ -208,11 +166,7 @@ def encode_provider_record(record, encoding_maps=None):
 
 
 def check_serving_alignment():
-    """Fail loudly if this column order has drifted from the one the model was trained on.
-
-    XGBoost validates nothing about column NAMES -- it scores by position. Misaligned columns
-    produce confident, silent nonsense, which is the worst failure mode a deployed scorer has.
-    """
+    """Gives (matches, model columns), because XGBoost reads columns by position and never warns on a wrong order."""
     import xgboost as xgb
 
     model = xgb.XGBClassifier()

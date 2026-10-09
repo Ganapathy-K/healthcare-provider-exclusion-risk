@@ -1,30 +1,8 @@
-"""Langfuse tracing: make every answer replayable after the fact.
+"""Logs each question's route, retrieval and answer in Langfuse, so a wrong answer can be traced to its step.
 
-Ported unchanged from the insurance project -- the same three needs, and no reason to write
-it twice.
-
-Why this exists, in the shape this project's failures actually took. When someone says "it
-refused a question it should have answered", the answer text alone is useless: the question
-is *did retrieval miss the record, or did it retrieve the record and refuse anyway?* Those
-are completely different bugs with different fixes, and this project has now had both --
-the PROCTOLOGY question (retrieval missed) and the NPI-in-context bug (retrieval was fine,
-the prompt demanded a citation the context could not supply). Neither is recoverable from a
-screenshot. Distinguishing them by hand cost an hour on 2026-07-27; a trace records the
-route, the retrieval, the prompt and the answer as one linked record.
-
-The agent adds a second thing worth replaying: WHICH TOOL RAN. A question answered from the
-wrong branch is a confident answer from the wrong half of the system, and the response text
-alone rarely gives it away.
-
-Failing open is deliberate. If Langfuse is unreachable, unconfigured, or its keys are
-wrong, the app must still answer questions -- observability that can take down the thing
-it observes is a liability, not a safeguard. Every function here is a no-op when
-LANGFUSE_PUBLIC_KEY is unset, which is also what keeps the eval harness and unit tests
-from needing credentials.
-
-The report half reads real traces back: latency P50 / P95, cost per question, and citation
-coverage (the share of answers that name an NPI they were shown). It uses trace.get(), not
-the list endpoints, because the list endpoints return a trimmed record with no cost data.
+1. One linked trace per question: "retrieval missed it" and "Gemini refused anyway" need opposite fixes.
+2. Fails open: no LANGFUSE_PUBLIC_KEY or Langfuse down, and the agent still answers.
+3. --report reads real traces back: speed P50 / P95, cost per question, NPI citation share.
 
 Self-test:  python src/tracing.py
 Report:     python src/tracing.py --report [limit]
@@ -38,9 +16,7 @@ from contextlib import contextmanager
 
 from dotenv import load_dotenv
 
-# The keys live in .env like every other credential here. Reading os.environ without this
-# silently reports "tracing disabled" on a correctly configured machine -- a failure mode
-# that looks identical to not having set the keys at all.
+# Keys live in .env; without this, a set-up machine shows "tracing disabled".
 load_dotenv()
 
 TRACING_ENABLED = bool(os.getenv("LANGFUSE_PUBLIC_KEY"))
@@ -61,17 +37,7 @@ def get_langfuse():
 
 @contextmanager
 def trace_span(name, as_type="span", **attributes):
-    """Time a step and attach it to the current trace; do nothing if tracing is off.
-
-    `as_type` is Langfuse's observation type -- "retriever", "generation" and "guardrail"
-    render differently in the UI and let you filter for, say, every generation slower than
-    two seconds. Using the right type is the difference between a searchable record and a
-    wall of identical grey spans.
-
-    Failures inside the tracer are swallowed; failures inside the caller's body are not.
-    A network blip talking to Langfuse must never surface as a failed answer, but a bug in
-    the code being traced still has to raise.
-    """
+    """Times one step inside the current trace; a Langfuse failure is swallowed, a code failure still raises."""
     client = get_langfuse()
     if client is None:
         yield None
@@ -98,20 +64,7 @@ def update_span(span, **fields):
         pass
 
 
-def flush():
-    """Push buffered events. Needed for short-lived runs (eval batches, scripts) that
-    would otherwise exit before the background sender wakes up."""
-    client = get_langfuse()
-    if client is None:
-        return
-    try:
-        client.flush()
-    except Exception:
-        pass
-
-
-# Every user-facing question enters through the router. Measuring the RAG span would
-# report on half the traffic.
+# Every question enters through the agent, so this name covers all traffic.
 ROOT_SPAN_NAME = "agent"
 
 # The RAG leg, when one ran. Used to find which NPIs the model was actually shown.
@@ -125,11 +78,7 @@ USD_TO_INR = 88.0
 
 
 def percentile(values, fraction):
-    """Nearest-rank percentile: returns an OBSERVED value, not an interpolation.
-
-    At these sample sizes that matters -- P95 of thirty traces should be a request that
-    really happened, not a number between two that did.
-    """
+    """Gives a value that really happened (nearest rank), not a number between two."""
     if not values:
         return None
     ordered = sorted(values)
@@ -145,7 +94,7 @@ def collect(limit=100):
 
     listed = client.api.trace.list(limit=limit).data
     wanted = [t for t in listed if t.name == ROOT_SPAN_NAME]
-    # Re-fetched in full because the list response omits cost and output. See the docstring.
+    # Fetched again in full: the list call leaves out cost and output.
     return [client.api.trace.get(trace.id) for trace in wanted]
 
 
@@ -158,11 +107,7 @@ def generation_span(trace):
 
 
 def answer_and_shown_npis(trace):
-    """(answer text, NPIs the model was actually given) for one trace.
-
-    The second value is the point: an answer citing an NPI that was never retrieved is a
-    fabrication, and the only place that is visible is the trace.
-    """
+    """Gives (answer, NPIs Gemini was shown); an NPI in the answer but not shown = made up."""
     span = generation_span(trace)
     output = getattr(span, "output", None) if span else None
 
@@ -277,6 +222,7 @@ if __name__ == "__main__":
     with trace_span("selftest", note="tracing.py smoke test") as span:
         update_span(span, output={"ok": True})
         sent = span is not None
-    flush()
+    if client:
+        client.flush()
     print("sent a 'selftest' trace -- check the Langfuse dashboard" if sent
           else "nothing sent (tracing is off)")

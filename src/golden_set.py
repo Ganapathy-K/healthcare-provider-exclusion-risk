@@ -1,29 +1,11 @@
-"""Questions with known-correct answers, so retrieval can be measured instead of eyeballed.
+"""The answer key: 29 questions with the right NPIs written down before any run, so retrieval is measured.
 
-Every question here was built BACKWARDS from the LEIE itself: a record (or a small set of
-records) was chosen first, then a question written that only those records answer. The
-`expected_npis` are therefore verifiable -- re-derivable from the source file, not remembered.
+1. Built backwards: a record was picked first, then a question only it answers.
+2. NPI as the answer, not text: right-or-wrong needs no LLM judge, so hit rate and MRR are free.
+3. Rare specialty + state: 2 right NPIs, not 1,071, so a lucky hit cannot score.
+4. Three kinds: answerable · expected refusal · trap (records look right but cannot answer).
 
-Why an NPI is the ground truth rather than the answer text: the NPI is the only field that
-identifies a provider unambiguously, so "did retrieval surface the right record?" has a yes/no
-answer that needs no judge, no API call and no money. That is what makes hit rate and MRR free
-here, exactly as page numbers do in the sibling insurance project.
-
-**Rare combinations are used deliberately.** "Which providers were excluded in California?"
-has 1,071 correct answers, so any three records score a hit and the question measures nothing.
-"Which acupuncturists in New York were excluded?" has exactly two, and retrieval either finds
-them or does not.
-
-THREE KINDS OF ITEM:
-
-  answerable      the records contain the answer; expected_npis lists them
-  expected_refusal  nothing in the corpus answers it; the system must decline
-  trap            the records look relevant but do NOT support the question asked --
-                  the case where a grounded system is supposed to refuse and a fluent one
-                  invents. These are the ones worth having.
-
-⚠️ Counts are as of the LEIE file dated 202602 (`data/raw/oig_leie_202602.csv`). A newer
-download will change them, and `verify()` below will say so rather than letting the set rot.
+Counts match data/raw/oig_leie_202602.csv; verify() fails if a newer LEIE file changes them.
 """
 
 import sys
@@ -78,10 +60,7 @@ GOLDEN_SET = [
         "note": "PARAMEDIC TECHNICIAN appears once.",
     },
 
-    # --- answerable (added 2026-07-31): rare specialty+state, exactly two records each. ---
-    # Every NPI below was re-derived from data/raw/oig_leie_202602.csv by grouping the
-    # NPI-bearing records on (SPECIALTY, STATE) and keeping only pairs -- verify() re-checks
-    # them against the source, so the set fails loudly rather than rotting if the file changes.
+    # --- answerable: rare specialty + state, exactly two records each ---
     {
         "question": "Were any ambulance companies in California excluded?",
         "expected_npis": [1871502146, 1811022312],
@@ -118,7 +97,7 @@ GOLDEN_SET = [
         "note": "DME - OXYGEN / ME -- exactly two.",
     },
 
-    # --- answerable (added 2026-07-31): specialties with exactly one NPI-bearing record. ---
+    # --- answerable: specialties with exactly one NPI-bearing record ---
     {
         "question": "Was a rural health clinic ever excluded?",
         "expected_npis": [1215925102],
@@ -179,7 +158,7 @@ GOLDEN_SET = [
                 "would be the most damaging failure this system could have.",
     },
 
-    # --- refusals/traps (added 2026-07-31): plausible, on-topic, and absent from the fields ---
+    # --- refusals and traps: on-topic, but absent from the indexed fields ---
     {
         "question": "What are the office phone numbers of the excluded ambulance companies?",
         "expected_refusal": True,
@@ -214,12 +193,7 @@ def refusal_items():
 
 
 def verify():
-    """Re-derive every expected NPI from the LEIE, so the set cannot silently rot.
-
-    A golden set that stops matching its source is worse than none: it keeps reporting scores
-    against answers that are no longer correct. This turns that from a silent problem into a
-    failing check.
-    """
+    """Gives every expected NPI missing from the LEIE, so a stale golden set fails instead of scoring wrong."""
     from ingest import load_leie
 
     leie = load_leie()

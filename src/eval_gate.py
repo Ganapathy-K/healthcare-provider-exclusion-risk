@@ -1,35 +1,10 @@
-"""Fail the commit when retrieval quality drops below the recorded baseline.
+"""Blocks a commit when retrieval drops below the saved numbers, to catch a worse retriever early.
 
-The sibling insurance project runs the same gate for the same reason: an eval suite that
-nobody is forced to look at is a report, not a control. This one differs in three ways, and
-each difference is the interesting part.
-
-1. THREE METRICS, NOT TWO. `record_recall` is gated alongside hit rate and MRR because
-   several golden questions have more than one correct NPI. A question with three correct
-   providers and one retrieved scores a full hit -- hit rate cannot see the two that were
-   missed, and "list the excluded acupuncturists in New York" is exactly the kind of question
-   this system exists to answer. Gating only the first two would let a real regression through
-   while both headline numbers held.
-
-2. INFRASTRUCTURE FAILURE IS NOT A QUALITY FAILURE. Retrieval here runs against a Qdrant
-   SERVER in Docker, not an embedded file. If the container is stopped, every query returns
-   nothing, every metric collapses to zero, and a naive gate reports a catastrophic regression
-   caused by a change nobody made. That is the fastest possible way to teach someone to ignore
-   the gate. Qdrant is therefore checked FIRST and reported as an unmet precondition -- the
-   commit is still blocked, because an unmeasured commit is not a verified one, but the
-   message says what is actually wrong.
-
-3. WHY A PRE-COMMIT HOOK AND NOT GITHUB ACTIONS. The eval needs a running vector store and the
-   built NPPES/LEIE dataset, neither of which exists on a hosted runner. The gate runs where
-   the data is. It is written to CI conventions anyway (exit codes, committed JSON baseline,
-   non-interactive), so it moves into a workflow unchanged if that ever becomes possible.
-
-WHY THE FREE METRIC AND NOT AN LLM JUDGE. Every number here is decided by NPI membership --
-no model, no API call, no money, seconds to run. `answer_eval.py` grades the generated text
-and is the milestone tool; this is the per-change signal.
-
-IMPROVEMENTS DO NOT AUTO-UPDATE THE BASELINE. A gate that ratchets itself records whatever
-happened last rather than what was decided, and a slow decline never trips it.
+1. Three numbers, not two: record recall catches a question with 3 right NPIs that found only 1.
+2. Qdrant is checked first: a stopped Docker container says "Qdrant down", not "retrieval broke".
+3. Pre-commit hook, not GitHub Actions: the data and Qdrant live only on this machine.
+4. No LLM judge: every number is NPI matching, so it is free and takes seconds.
+5. Better numbers never overwrite the saved ones: only --update does, so a slow slide still fails.
 
 Run:      python src/eval_gate.py
 Report:   python src/eval_gate.py --report [k ...]   # hit rate, MRR, record recall at each k
@@ -51,13 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = PROJECT_ROOT / "docs" / "baseline.json"
 BASELINE_KEY = "retrieval"
 
-# Fixed deliberately rather than following RETRIEVER_K: a gate that scores whatever the app
-# currently defaults to stops comparing like with like the moment that default is tuned.
+# The same k the app uses (config.RETRIEVER_K = 10).
 GATED_TOP_K = RETRIEVER_K
 
-# These numbers call no model and sample nothing, so repeated runs are identical. The
-# tolerance absorbs dependency drift (a sentence-transformers update moving the third
-# decimal), not noise. Anything larger is a real change and wants a human.
+# Runs repeat exactly; 0.01 only absorbs a package update moving the third decimal.
 TOLERANCE = 0.01
 
 GATED_METRICS = ("hit_rate", "mrr", "record_recall")
@@ -78,15 +50,15 @@ def qdrant_is_reachable():
 
 
 def evaluate(top_k=RETRIEVER_K):
-    """Hit rate and MRR over the answerable golden questions."""
+    """Gives hit rate, MRR and record recall over the 20 answerable golden questions, one search each."""
     hits = 0
     reciprocal_ranks = []
     misses = []
+    recalled, expected_total = 0, 0
 
     for item in answerable_items():
         wanted = set(item["expected_npis"])
-        documents = retrieve(item["question"], top_k=top_k)
-        retrieved = [doc.metadata["NPI"] for doc in documents]
+        retrieved = [doc.metadata["NPI"] for doc in retrieve(item["question"], top_k=top_k)]
 
         found_at = next((rank for rank, npi in enumerate(retrieved, start=1)
                          if npi in wanted), None)
@@ -97,14 +69,8 @@ def evaluate(top_k=RETRIEVER_K):
             reciprocal_ranks.append(0.0)
             misses.append(item["question"])
 
-    # How many of ALL the correct records were surfaced, not just the first. A question with
-    # three correct answers and one retrieved scores a hit, which flatters a system asked to
-    # "list the providers" -- this is the number that notices.
-    recalled, expected_total = 0, 0
-    for item in answerable_items():
-        wanted = set(item["expected_npis"])
-        retrieved = {doc.metadata["NPI"] for doc in retrieve(item["question"], top_k=top_k)}
-        recalled += len(wanted & retrieved)
+        # Record recall: how many of ALL the right NPIs came back, not just the first.
+        recalled += len(wanted & set(retrieved))
         expected_total += len(wanted)
 
     total = len(answerable_items())
@@ -131,18 +97,6 @@ def measure():
         "record_recall": round(result["record_recall"], 4),
         "records_expected": result["records_expected"],
     }
-
-
-def load_baseline():
-    if not BASELINE_PATH.exists():
-        return None
-    return json.loads(BASELINE_PATH.read_text(encoding="utf-8")).get(BASELINE_KEY)
-
-
-def save_baseline(measured):
-    recorded = json.loads(BASELINE_PATH.read_text(encoding="utf-8")) if BASELINE_PATH.exists() else {}
-    recorded[BASELINE_KEY] = measured
-    BASELINE_PATH.write_text(json.dumps(recorded, indent=2), encoding="utf-8")
 
 
 def compare(measured, baseline):
@@ -172,14 +126,10 @@ def install_hook():
     hook_path = (PROJECT_ROOT / git_dir / "hooks" / "pre-commit").resolve()
     hook_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Pinned to the interpreter running this install, NOT bare `python`: git hooks run without
-    # the virtualenv activated, so `python` would resolve to a global install missing every
-    # dependency here. The gate would then fail on every commit for an unrelated reason, and a
-    # gate that cries wolf gets deleted within a day.
+    # This Python, not bare `python`: a git hook runs outside the virtualenv.
     interpreter = Path(sys.executable).as_posix()
 
-    # The bypass stays on purpose -- a gate with no escape hatch gets uninstalled the first
-    # time someone needs to commit a README fix while retrieval is mid-refactor.
+    # --no-verify stays, so a README fix can still go in while retrieval is broken.
     hook_path.write_text(
         "#!/bin/sh\n"
         "# Installed by src/eval_gate.py. Bypass once with: git commit --no-verify\n"
@@ -224,11 +174,13 @@ def main():
         report([int(argument) for argument in sys.argv[2:]] or [3, 5, 8, 10])
         return 0
 
-    baseline = load_baseline()
+    recorded = json.loads(BASELINE_PATH.read_text(encoding="utf-8")) if BASELINE_PATH.exists() else {}
+    baseline = recorded.get(BASELINE_KEY)
 
     if "--update" in sys.argv or baseline is None:
         measured = measure()
-        save_baseline(measured)
+        recorded[BASELINE_KEY] = measured
+        BASELINE_PATH.write_text(json.dumps(recorded, indent=2), encoding="utf-8")
         action = "recorded" if baseline is None else "updated"
         print(f"baseline {action}: hit_rate={measured['hit_rate']:.4f} "
               f"MRR={measured['mrr']:.4f} record_recall={measured['record_recall']:.4f}  "
